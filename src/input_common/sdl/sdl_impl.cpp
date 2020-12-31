@@ -352,13 +352,20 @@ private:
 class SDLAnalog final : public Input::AnalogDevice {
 public:
     explicit SDLAnalog(std::shared_ptr<SDLJoystick> joystick_, int axis_x_, int axis_y_,
-                       float deadzone_, float range_)
-        : joystick(std::move(joystick_)), axis_x(axis_x_), axis_y(axis_y_), deadzone(deadzone_),
-          range(range_) {}
+                       bool invert_x_, bool invert_y_, float deadzone_, float range_)
+        : joystick(std::move(joystick_)), axis_x(axis_x_), axis_y(axis_y_), invert_x(invert_x_),
+          invert_y(invert_y_), deadzone(deadzone_), range(range_) {}
 
     std::tuple<float, float> GetStatus() const override {
-        const auto [x, y] = joystick->GetAnalog(axis_x, axis_y, range);
+        auto [x, y] = joystick->GetAnalog(axis_x, axis_y, range);
         const float r = std::sqrt((x * x) + (y * y));
+        if (invert_x) {
+            x = -x;
+        }
+        if (invert_y) {
+            y = -y;
+        }
+
         if (r > deadzone) {
             return std::make_tuple(x / r * (r - deadzone) / (1 - deadzone),
                                    y / r * (r - deadzone) / (1 - deadzone));
@@ -386,6 +393,8 @@ private:
     std::shared_ptr<SDLJoystick> joystick;
     const int axis_x;
     const int axis_y;
+    const bool invert_x;
+    const bool invert_y;
     const float deadzone;
     const float range;
 };
@@ -572,12 +581,17 @@ public:
         const int axis_y = params.Get("axis_y", 1);
         const float deadzone = std::clamp(params.Get("deadzone", 0.0f), 0.0f, 1.0f);
         const float range = std::clamp(params.Get("range", 1.0f), 0.50f, 1.50f);
+        const std::string invert_x_value = params.Get("invert_x", "+");
+        const std::string invert_y_value = params.Get("invert_y", "+");
+        const bool invert_x = invert_x_value == "-";
+        const bool invert_y = invert_y_value == "-";
         auto joystick = state.GetSDLJoystickByGUID(guid, port);
 
         // This is necessary so accessing GetAxis with axis_x and axis_y won't crash
         joystick->SetAxis(axis_x, 0);
         joystick->SetAxis(axis_y, 0);
-        return std::make_unique<SDLAnalog>(joystick, axis_x, axis_y, deadzone, range);
+        return std::make_unique<SDLAnalog>(joystick, axis_x, axis_y, invert_x, invert_y, deadzone,
+                                           range);
     }
 
 private:
@@ -886,6 +900,8 @@ Common::ParamPackage BuildParamPackageForAnalog(int port, const std::string& gui
     params.Set("guid", guid);
     params.Set("axis_x", axis_x);
     params.Set("axis_y", axis_y);
+    params.Set("invert_x", "+");
+    params.Set("invert_y", "+");
     return params;
 }
 } // Anonymous namespace
@@ -1014,11 +1030,44 @@ public:
         }
         return {};
     }
-    [[nodiscard]] std::optional<Common::ParamPackage> FromEvent(const SDL_Event& event) const {
+    [[nodiscard]] std::optional<Common::ParamPackage> FromEvent(SDL_Event& event) {
         switch (event.type) {
         case SDL_JOYAXISMOTION:
-            if (std::abs(event.jaxis.value / 32767.0) < 0.5) {
+            if (!axis_memory.count(event.jaxis.which) ||
+                !axis_memory[event.jaxis.which].count(event.jaxis.axis)) {
+                axis_memory[event.jaxis.which][event.jaxis.axis] = event.jaxis.value;
+                axis_event_count[event.jaxis.which][event.jaxis.axis] = 1;
                 break;
+            } else {
+                axis_event_count[event.jaxis.which][event.jaxis.axis]++;
+                // The joystick and axis exist in our map if we take this branch, so no checks
+                // needed
+                if (std::abs(
+                        (event.jaxis.value - axis_memory[event.jaxis.which][event.jaxis.axis]) /
+                        32767.0) < 0.5) {
+                    break;
+                } else {
+                    if (axis_event_count[event.jaxis.which][event.jaxis.axis] == 2 &&
+                        IsAxisAtPole(event.jaxis.value) &&
+                        IsAxisAtPole(axis_memory[event.jaxis.which][event.jaxis.axis])) {
+                        // If we have exactly two events and both are near a pole, this is
+                        // likely a digital input masquerading as an analog axis; Instead of
+                        // trying to look at the direction the axis travelled, assume the first
+                        // event was press and the second was release; This should handle most
+                        // digital axes while deferring to the direction of travel for analog
+                        // axes
+                        event.jaxis.value = static_cast<Sint16>(
+                            std::copysign(32767, axis_memory[event.jaxis.which][event.jaxis.axis]));
+                    } else {
+                        // There are more than two events, so this is likely a true analog axis,
+                        // check the direction it travelled
+                        event.jaxis.value = static_cast<Sint16>(std::copysign(
+                            32767,
+                            event.jaxis.value - axis_memory[event.jaxis.which][event.jaxis.axis]));
+                    }
+                    axis_memory.clear();
+                    axis_event_count.clear();
+                }
             }
             [[fallthrough]];
         case SDL_JOYBUTTONUP:
@@ -1027,6 +1076,16 @@ public:
         }
         return std::nullopt;
     }
+
+private:
+    // Determine whether an axis value is close to an extreme or center
+    // Some controllers have a digital D-Pad as a pair of analog sticks, with 3 possible values per
+    // axis, which is why the center must be considered a pole
+    bool IsAxisAtPole(int16_t value) const {
+        return std::abs(value) >= 32767 || std::abs(value) < 327;
+    }
+    std::unordered_map<SDL_JoystickID, std::unordered_map<uint8_t, int16_t>> axis_memory;
+    std::unordered_map<SDL_JoystickID, std::unordered_map<uint8_t, uint32_t>> axis_event_count;
 };
 
 class SDLMotionPoller final : public SDLPoller {
