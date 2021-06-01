@@ -61,7 +61,7 @@ using VideoCore::Surface::SurfaceType;
 template <class P>
 class TextureCache {
     /// Address shift for caching images into a hash table
-    static constexpr u64 PAGE_SHIFT = 20;
+    static constexpr u64 PAGE_BITS = 20;
 
     /// Enables debugging features to the texture cache
     static constexpr bool ENABLE_VALIDATION = P::ENABLE_VALIDATION;
@@ -102,9 +102,6 @@ public:
 
     /// Notify the cache that a new frame has been queued
     void TickFrame();
-
-    /// Return an unique mutually exclusive lock for the cache
-    [[nodiscard]] std::unique_lock<std::mutex> AcquireLock();
 
     /// Return a constant reference to the given image view id
     [[nodiscard]] const ImageView& GetImageView(ImageViewId id) const noexcept;
@@ -151,7 +148,9 @@ public:
     /// Blit an image with the given parameters
     void BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
                    const Tegra::Engines::Fermi2D::Surface& src,
-                   const Tegra::Engines::Fermi2D::Config& copy);
+                   const Tegra::Engines::Fermi2D::Config& copy,
+                   std::optional<Region2D> src_region_override = {},
+                   std::optional<Region2D> dst_region_override = {});
 
     /// Invalidate the contents of the color buffer index
     /// These contents become unspecified, the cache can assume aggressive optimizations.
@@ -179,13 +178,15 @@ public:
     /// Return true when a CPU region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size);
 
+    std::mutex mutex;
+
 private:
     /// Iterate over all page indices in a range
     template <typename Func>
     static void ForEachPage(VAddr addr, size_t size, Func&& func) {
         static constexpr bool RETURNS_BOOL = std::is_same_v<std::invoke_result<Func, u64>, bool>;
-        const u64 page_end = (addr + size - 1) >> PAGE_SHIFT;
-        for (u64 page = addr >> PAGE_SHIFT; page <= page_end; ++page) {
+        const u64 page_end = (addr + size - 1) >> PAGE_BITS;
+        for (u64 page = addr >> PAGE_BITS; page <= page_end; ++page) {
             if constexpr (RETURNS_BOOL) {
                 if (func(page)) {
                     break;
@@ -212,8 +213,8 @@ private:
     void RefreshContents(Image& image);
 
     /// Upload data from guest to an image
-    template <typename MapBuffer>
-    void UploadImageContents(Image& image, MapBuffer& map, size_t buffer_offset);
+    template <typename StagingBuffer>
+    void UploadImageContents(Image& image, StagingBuffer& staging_buffer);
 
     /// Find or create an image view from a guest descriptor
     [[nodiscard]] ImageViewId FindImageView(const TICEntry& config);
@@ -325,8 +326,6 @@ private:
 
     RenderTargets render_targets;
 
-    std::mutex mutex;
-
     std::unordered_map<TICEntry, ImageViewId> image_views;
     std::unordered_map<TSCEntry, SamplerId> samplers;
     std::unordered_map<RenderTargets, FramebufferId> framebuffers;
@@ -383,11 +382,6 @@ void TextureCache<P>::TickFrame() {
     sentenced_framebuffers.Tick();
     sentenced_image_view.Tick();
     ++frame_tick;
-}
-
-template <class P>
-std::unique_lock<std::mutex> TextureCache<P>::AcquireLock() {
-    return std::unique_lock{mutex};
 }
 
 template <class P>
@@ -598,11 +592,11 @@ void TextureCache<P>::DownloadMemory(VAddr cpu_addr, size_t size) {
     });
     for (const ImageId image_id : images) {
         Image& image = slot_images[image_id];
-        auto map = runtime.MapDownloadBuffer(image.unswizzled_size_bytes);
+        auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
         const auto copies = FullDownloadCopies(image.info);
-        image.DownloadMemory(map, 0, copies);
+        image.DownloadMemory(map, copies);
         runtime.Finish();
-        SwizzleImage(gpu_memory, image.gpu_addr, image.info, copies, map.Span());
+        SwizzleImage(gpu_memory, image.gpu_addr, image.info, copies, map.mapped_span);
     }
 }
 
@@ -623,7 +617,9 @@ void TextureCache<P>::UnmapMemory(VAddr cpu_addr, size_t size) {
 template <class P>
 void TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
                                 const Tegra::Engines::Fermi2D::Surface& src,
-                                const Tegra::Engines::Fermi2D::Config& copy) {
+                                const Tegra::Engines::Fermi2D::Config& copy,
+                                std::optional<Region2D> src_override,
+                                std::optional<Region2D> dst_override) {
     const BlitImages images = GetBlitImages(dst, src);
     const ImageId dst_id = images.dst_id;
     const ImageId src_id = images.src_id;
@@ -639,20 +635,42 @@ void TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
     const ImageViewInfo dst_view_info(ImageViewType::e2D, images.dst_format, dst_range);
     const auto [dst_framebuffer_id, dst_view_id] = RenderTargetFromImage(dst_id, dst_view_info);
     const auto [src_samples_x, src_samples_y] = SamplesLog2(src_image.info.num_samples);
-    const std::array src_region{
-        Offset2D{.x = copy.src_x0 >> src_samples_x, .y = copy.src_y0 >> src_samples_y},
-        Offset2D{.x = copy.src_x1 >> src_samples_x, .y = copy.src_y1 >> src_samples_y},
+
+    // out of bounds texture blit checking
+    const bool use_override = src_override.has_value();
+    const s32 src_x0 = copy.src_x0 >> src_samples_x;
+    s32 src_x1 = use_override ? src_override->end.x : copy.src_x1 >> src_samples_x;
+    const s32 src_y0 = copy.src_y0 >> src_samples_y;
+    const s32 src_y1 = copy.src_y1 >> src_samples_y;
+
+    const auto src_width = static_cast<s32>(src_image.info.size.width);
+    const bool width_oob = src_x1 > src_width;
+    const auto width_diff = width_oob ? src_x1 - src_width : 0;
+    if (width_oob) {
+        src_x1 = src_width;
+    }
+
+    const Region2D src_dimensions{
+        Offset2D{.x = src_x0, .y = src_y0},
+        Offset2D{.x = src_x1, .y = src_y1},
     };
+    const auto src_region = use_override ? *src_override : src_dimensions;
 
     const std::optional src_base = src_image.TryFindBase(src.Address());
     const SubresourceRange src_range{.base = src_base.value(), .extent = {1, 1}};
     const ImageViewInfo src_view_info(ImageViewType::e2D, images.src_format, src_range);
     const auto [src_framebuffer_id, src_view_id] = RenderTargetFromImage(src_id, src_view_info);
     const auto [dst_samples_x, dst_samples_y] = SamplesLog2(dst_image.info.num_samples);
-    const std::array dst_region{
-        Offset2D{.x = copy.dst_x0 >> dst_samples_x, .y = copy.dst_y0 >> dst_samples_y},
-        Offset2D{.x = copy.dst_x1 >> dst_samples_x, .y = copy.dst_y1 >> dst_samples_y},
+
+    const s32 dst_x0 = copy.dst_x0 >> dst_samples_x;
+    const s32 dst_x1 = copy.dst_x1 >> dst_samples_x;
+    const s32 dst_y0 = copy.dst_y0 >> dst_samples_y;
+    const s32 dst_y1 = copy.dst_y1 >> dst_samples_y;
+    const Region2D dst_dimensions{
+        Offset2D{.x = dst_x0, .y = dst_y0},
+        Offset2D{.x = dst_x1 - width_diff, .y = dst_y1},
     };
+    const auto dst_region = use_override ? *dst_override : dst_dimensions;
 
     // Always call this after src_framebuffer_id was queried, as the address might be invalidated.
     Framebuffer* const dst_framebuffer = &slot_framebuffers[dst_framebuffer_id];
@@ -668,6 +686,21 @@ void TextureCache<P>::BlitImage(const Tegra::Engines::Fermi2D::Surface& dst,
         ImageView& src_view = slot_image_views[src_view_id];
         runtime.BlitImage(dst_framebuffer, dst_view, src_view, dst_region, src_region, copy.filter,
                           copy.operation);
+    }
+
+    if (width_oob) {
+        // Continue copy of the oob region of the texture on the next row
+        auto oob_src = src;
+        oob_src.height++;
+        const Region2D src_region_override{
+            Offset2D{.x = 0, .y = src_y0 + 1},
+            Offset2D{.x = width_diff, .y = src_y1 + 1},
+        };
+        const Region2D dst_region_override{
+            Offset2D{.x = dst_x1 - width_diff, .y = dst_y0},
+            Offset2D{.x = dst_x1, .y = dst_y1},
+        };
+        BlitImage(dst, oob_src, copy, src_region_override, dst_region_override);
     }
 }
 
@@ -708,7 +741,7 @@ void TextureCache<P>::InvalidateDepthBuffer() {
 template <class P>
 typename P::ImageView* TextureCache<P>::TryFindFramebufferImageView(VAddr cpu_addr) {
     // TODO: Properly implement this
-    const auto it = page_table.find(cpu_addr >> PAGE_SHIFT);
+    const auto it = page_table.find(cpu_addr >> PAGE_BITS);
     if (it == page_table.end()) {
         return nullptr;
     }
@@ -757,25 +790,25 @@ void TextureCache<P>::PopAsyncFlushes() {
     for (const ImageId image_id : download_ids) {
         total_size_bytes += slot_images[image_id].unswizzled_size_bytes;
     }
-    auto download_map = runtime.MapDownloadBuffer(total_size_bytes);
-    size_t buffer_offset = 0;
+    auto download_map = runtime.DownloadStagingBuffer(total_size_bytes);
+    const size_t original_offset = download_map.offset;
     for (const ImageId image_id : download_ids) {
         Image& image = slot_images[image_id];
         const auto copies = FullDownloadCopies(image.info);
-        image.DownloadMemory(download_map, buffer_offset, copies);
-        buffer_offset += image.unswizzled_size_bytes;
+        image.DownloadMemory(download_map, copies);
+        download_map.offset += image.unswizzled_size_bytes;
     }
     // Wait for downloads to finish
     runtime.Finish();
 
-    buffer_offset = 0;
-    const std::span<u8> download_span = download_map.Span();
+    download_map.offset = original_offset;
+    std::span<u8> download_span = download_map.mapped_span;
     for (const ImageId image_id : download_ids) {
         const ImageBase& image = slot_images[image_id];
         const auto copies = FullDownloadCopies(image.info);
-        const std::span<u8> image_download_span = download_span.subspan(buffer_offset);
-        SwizzleImage(gpu_memory, image.gpu_addr, image.info, copies, image_download_span);
-        buffer_offset += image.unswizzled_size_bytes;
+        SwizzleImage(gpu_memory, image.gpu_addr, image.info, copies, download_span);
+        download_map.offset += image.unswizzled_size_bytes;
+        download_span = download_span.subspan(image.unswizzled_size_bytes);
     }
     committed_downloads.pop();
 }
@@ -806,32 +839,32 @@ void TextureCache<P>::RefreshContents(Image& image) {
         LOG_WARNING(HW_GPU, "MSAA image uploads are not implemented");
         return;
     }
-    auto map = runtime.MapUploadBuffer(MapSizeBytes(image));
-    UploadImageContents(image, map, 0);
+    auto staging = runtime.UploadStagingBuffer(MapSizeBytes(image));
+    UploadImageContents(image, staging);
     runtime.InsertUploadMemoryBarrier();
 }
 
 template <class P>
-template <typename MapBuffer>
-void TextureCache<P>::UploadImageContents(Image& image, MapBuffer& map, size_t buffer_offset) {
-    const std::span<u8> mapped_span = map.Span().subspan(buffer_offset);
+template <typename StagingBuffer>
+void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) {
+    const std::span<u8> mapped_span = staging.mapped_span;
     const GPUVAddr gpu_addr = image.gpu_addr;
 
     if (True(image.flags & ImageFlagBits::AcceleratedUpload)) {
         gpu_memory.ReadBlockUnsafe(gpu_addr, mapped_span.data(), mapped_span.size_bytes());
         const auto uploads = FullUploadSwizzles(image.info);
-        runtime.AccelerateImageUpload(image, map, buffer_offset, uploads);
+        runtime.AccelerateImageUpload(image, staging, uploads);
     } else if (True(image.flags & ImageFlagBits::Converted)) {
         std::vector<u8> unswizzled_data(image.unswizzled_size_bytes);
         auto copies = UnswizzleImage(gpu_memory, gpu_addr, image.info, unswizzled_data);
         ConvertImage(unswizzled_data, image.info, mapped_span, copies);
-        image.UploadMemory(map, buffer_offset, copies);
+        image.UploadMemory(staging, copies);
     } else if (image.info.type == ImageType::Buffer) {
         const std::array copies{UploadBufferCopy(gpu_memory, gpu_addr, image, mapped_span)};
-        image.UploadMemory(map, buffer_offset, copies);
+        image.UploadMemory(staging, copies);
     } else {
         const auto copies = UnswizzleImage(gpu_memory, gpu_addr, image.info, mapped_span);
-        image.UploadMemory(map, buffer_offset, copies);
+        image.UploadMemory(staging, copies);
     }
 }
 
@@ -883,6 +916,8 @@ ImageId TextureCache<P>::FindImage(const ImageInfo& info, GPUVAddr gpu_addr,
     if (!cpu_addr) {
         return ImageId{};
     }
+    const bool broken_views = runtime.HasBrokenTextureViewFormats();
+    const bool native_bgr = runtime.HasNativeBgr();
     ImageId image_id;
     const auto lambda = [&](ImageId existing_image_id, ImageBase& existing_image) {
         if (info.type == ImageType::Linear || existing_image.info.type == ImageType::Linear) {
@@ -892,11 +927,12 @@ ImageId TextureCache<P>::FindImage(const ImageInfo& info, GPUVAddr gpu_addr,
             if (existing_image.gpu_addr == gpu_addr && existing.type == info.type &&
                 existing.pitch == info.pitch &&
                 IsPitchLinearSameSize(existing, info, strict_size) &&
-                IsViewCompatible(existing.format, info.format)) {
+                IsViewCompatible(existing.format, info.format, broken_views, native_bgr)) {
                 image_id = existing_image_id;
                 return true;
             }
-        } else if (IsSubresource(info, existing_image, gpu_addr, options)) {
+        } else if (IsSubresource(info, existing_image, gpu_addr, options, broken_views,
+                                 native_bgr)) {
             image_id = existing_image_id;
             return true;
         }
@@ -926,6 +962,8 @@ template <class P>
 ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, VAddr cpu_addr) {
     ImageInfo new_info = info;
     const size_t size_bytes = CalculateGuestSizeInBytes(new_info);
+    const bool broken_views = runtime.HasBrokenTextureViewFormats();
+    const bool native_bgr = runtime.HasNativeBgr();
     std::vector<ImageId> overlap_ids;
     std::vector<ImageId> left_aliased_ids;
     std::vector<ImageId> right_aliased_ids;
@@ -940,7 +978,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, VA
             }
             return;
         }
-        const auto solution = ResolveOverlap(new_info, gpu_addr, cpu_addr, overlap, true);
+        static constexpr bool strict_size = true;
+        const std::optional<OverlapResult> solution = ResolveOverlap(
+            new_info, gpu_addr, cpu_addr, overlap, strict_size, broken_views, native_bgr);
         if (solution) {
             gpu_addr = solution->gpu_addr;
             cpu_addr = solution->cpu_addr;
@@ -950,9 +990,10 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, VA
         }
         static constexpr auto options = RelaxedOptions::Size | RelaxedOptions::Format;
         const ImageBase new_image_base(new_info, gpu_addr, cpu_addr);
-        if (IsSubresource(new_info, overlap, gpu_addr, options)) {
+        if (IsSubresource(new_info, overlap, gpu_addr, options, broken_views, native_bgr)) {
             left_aliased_ids.push_back(overlap_id);
-        } else if (IsSubresource(overlap.info, new_image_base, overlap.gpu_addr, options)) {
+        } else if (IsSubresource(overlap.info, new_image_base, overlap.gpu_addr, options,
+                                 broken_views, native_bgr)) {
             right_aliased_ids.push_back(overlap_id);
         }
     });
@@ -1165,13 +1206,13 @@ void TextureCache<P>::UnregisterImage(ImageId image_id) {
     ForEachPage(image.cpu_addr, image.guest_size_bytes, [this, image_id](u64 page) {
         const auto page_it = page_table.find(page);
         if (page_it == page_table.end()) {
-            UNREACHABLE_MSG("Unregistering unregistered page=0x{:x}", page << PAGE_SHIFT);
+            UNREACHABLE_MSG("Unregistering unregistered page=0x{:x}", page << PAGE_BITS);
             return;
         }
         std::vector<ImageId>& image_ids = page_it->second;
         const auto vector_it = std::ranges::find(image_ids, image_id);
         if (vector_it == image_ids.end()) {
-            UNREACHABLE_MSG("Unregistering unregistered image in page=0x{:x}", page << PAGE_SHIFT);
+            UNREACHABLE_MSG("Unregistering unregistered image in page=0x{:x}", page << PAGE_BITS);
             return;
         }
         image_ids.erase(vector_it);

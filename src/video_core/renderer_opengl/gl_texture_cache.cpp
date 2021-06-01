@@ -61,100 +61,99 @@ struct FormatTuple {
     GLenum internal_format;
     GLenum format = GL_NONE;
     GLenum type = GL_NONE;
-    GLenum store_format = internal_format;
 };
 
 constexpr std::array<FormatTuple, MaxPixelFormat> FORMAT_TABLE = {{
-    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV},                  // A8B8G8R8_UNORM
-    {GL_RGBA8_SNORM, GL_RGBA, GL_BYTE},                                // A8B8G8R8_SNORM
-    {GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE},                             // A8B8G8R8_SINT
-    {GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE},                   // A8B8G8R8_UINT
-    {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},                      // R5G6B5_UNORM
-    {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV},                  // B5G6R5_UNORM
-    {GL_RGB5_A1, GL_BGRA, GL_UNSIGNED_SHORT_1_5_5_5_REV},              // A1R5G5B5_UNORM
-    {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},            // A2B10G10R10_UNORM
-    {GL_RGB10_A2UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV},  // A2B10G10R10_UINT
-    {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV},              // A1B5G5R5_UNORM
-    {GL_R8, GL_RED, GL_UNSIGNED_BYTE},                                 // R8_UNORM
-    {GL_R8_SNORM, GL_RED, GL_BYTE},                                    // R8_SNORM
-    {GL_R8I, GL_RED_INTEGER, GL_BYTE},                                 // R8_SINT
-    {GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE},                       // R8_UINT
-    {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},                              // R16G16B16A16_FLOAT
-    {GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},                           // R16G16B16A16_UNORM
-    {GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},                              // R16G16B16A16_SNORM
-    {GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT},                           // R16G16B16A16_SINT
-    {GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT},                 // R16G16B16A16_UINT
-    {GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV},      // B10G11R11_FLOAT
-    {GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT},                   // R32G32B32A32_UINT
-    {GL_COMPRESSED_RGBA_S3TC_DXT1_EXT},                                // BC1_RGBA_UNORM
-    {GL_COMPRESSED_RGBA_S3TC_DXT3_EXT},                                // BC2_UNORM
-    {GL_COMPRESSED_RGBA_S3TC_DXT5_EXT},                                // BC3_UNORM
-    {GL_COMPRESSED_RED_RGTC1},                                         // BC4_UNORM
-    {GL_COMPRESSED_SIGNED_RED_RGTC1},                                  // BC4_SNORM
-    {GL_COMPRESSED_RG_RGTC2},                                          // BC5_UNORM
-    {GL_COMPRESSED_SIGNED_RG_RGTC2},                                   // BC5_SNORM
-    {GL_COMPRESSED_RGBA_BPTC_UNORM},                                   // BC7_UNORM
-    {GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT},                           // BC6H_UFLOAT
-    {GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT},                             // BC6H_SFLOAT
-    {GL_COMPRESSED_RGBA_ASTC_4x4_KHR},                                 // ASTC_2D_4X4_UNORM
-    {GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE},                             // B8G8R8A8_UNORM
-    {GL_RGBA32F, GL_RGBA, GL_FLOAT},                                   // R32G32B32A32_FLOAT
-    {GL_RGBA32I, GL_RGBA_INTEGER, GL_INT},                             // R32G32B32A32_SINT
-    {GL_RG32F, GL_RG, GL_FLOAT},                                       // R32G32_FLOAT
-    {GL_RG32I, GL_RG_INTEGER, GL_INT},                                 // R32G32_SINT
-    {GL_R32F, GL_RED, GL_FLOAT},                                       // R32_FLOAT
-    {GL_R16F, GL_RED, GL_HALF_FLOAT},                                  // R16_FLOAT
-    {GL_R16, GL_RED, GL_UNSIGNED_SHORT},                               // R16_UNORM
-    {GL_R16_SNORM, GL_RED, GL_SHORT},                                  // R16_SNORM
-    {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT},                     // R16_UINT
-    {GL_R16I, GL_RED_INTEGER, GL_SHORT},                               // R16_SINT
-    {GL_RG16, GL_RG, GL_UNSIGNED_SHORT},                               // R16G16_UNORM
-    {GL_RG16F, GL_RG, GL_HALF_FLOAT},                                  // R16G16_FLOAT
-    {GL_RG16UI, GL_RG_INTEGER, GL_UNSIGNED_SHORT},                     // R16G16_UINT
-    {GL_RG16I, GL_RG_INTEGER, GL_SHORT},                               // R16G16_SINT
-    {GL_RG16_SNORM, GL_RG, GL_SHORT},                                  // R16G16_SNORM
-    {GL_RGB32F, GL_RGB, GL_FLOAT},                                     // R32G32B32_FLOAT
-    {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, GL_RGBA8}, // A8B8G8R8_SRGB
-    {GL_RG8, GL_RG, GL_UNSIGNED_BYTE},                                 // R8G8_UNORM
-    {GL_RG8_SNORM, GL_RG, GL_BYTE},                                    // R8G8_SNORM
-    {GL_RG8I, GL_RG_INTEGER, GL_BYTE},                                 // R8G8_SINT
-    {GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE},                       // R8G8_UINT
-    {GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT},                       // R32G32_UINT
-    {GL_RGB16F, GL_RGBA, GL_HALF_FLOAT},                               // R16G16B16X16_FLOAT
-    {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT},                       // R32_UINT
-    {GL_R32I, GL_RED_INTEGER, GL_INT},                                 // R32_SINT
-    {GL_COMPRESSED_RGBA_ASTC_8x8_KHR},                                 // ASTC_2D_8X8_UNORM
-    {GL_COMPRESSED_RGBA_ASTC_8x5_KHR},                                 // ASTC_2D_8X5_UNORM
-    {GL_COMPRESSED_RGBA_ASTC_5x4_KHR},                                 // ASTC_2D_5X4_UNORM
-    {GL_SRGB8_ALPHA8, GL_BGRA, GL_UNSIGNED_BYTE, GL_RGBA8},            // B8G8R8A8_UNORM
-    {GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT},                          // BC1_RGBA_SRGB
-    {GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT},                          // BC2_SRGB
-    {GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT},                          // BC3_SRGB
-    {GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM},                             // BC7_SRGB
-    {GL_RGBA4, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4_REV},                // A4B4G4R4_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR},                         // ASTC_2D_4X4_SRGB
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR},                         // ASTC_2D_8X8_SRGB
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR},                         // ASTC_2D_8X5_SRGB
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR},                         // ASTC_2D_5X4_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_5x5_KHR},                                 // ASTC_2D_5X5_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR},                         // ASTC_2D_5X5_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_10x8_KHR},                                // ASTC_2D_10X8_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR},                        // ASTC_2D_10X8_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_6x6_KHR},                                 // ASTC_2D_6X6_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR},                         // ASTC_2D_6X6_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_10x10_KHR},                               // ASTC_2D_10X10_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR},                       // ASTC_2D_10X10_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_12x12_KHR},                               // ASTC_2D_12X12_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR},                       // ASTC_2D_12X12_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_8x6_KHR},                                 // ASTC_2D_8X6_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR},                         // ASTC_2D_8X6_SRGB
-    {GL_COMPRESSED_RGBA_ASTC_6x5_KHR},                                 // ASTC_2D_6X5_UNORM
-    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR},                         // ASTC_2D_6X5_SRGB
-    {GL_RGB9_E5, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV},                 // E5B9G9R9_FLOAT
-    {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT},             // D32_FLOAT
-    {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT},     // D16_UNORM
-    {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8},     // D24_UNORM_S8_UINT
-    {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8},     // S8_UINT_D24_UNORM
+    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV},                 // A8B8G8R8_UNORM
+    {GL_RGBA8_SNORM, GL_RGBA, GL_BYTE},                               // A8B8G8R8_SNORM
+    {GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE},                            // A8B8G8R8_SINT
+    {GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE},                  // A8B8G8R8_UINT
+    {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},                     // R5G6B5_UNORM
+    {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV},                 // B5G6R5_UNORM
+    {GL_RGB5_A1, GL_BGRA, GL_UNSIGNED_SHORT_1_5_5_5_REV},             // A1R5G5B5_UNORM
+    {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},           // A2B10G10R10_UNORM
+    {GL_RGB10_A2UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV}, // A2B10G10R10_UINT
+    {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV},             // A1B5G5R5_UNORM
+    {GL_R8, GL_RED, GL_UNSIGNED_BYTE},                                // R8_UNORM
+    {GL_R8_SNORM, GL_RED, GL_BYTE},                                   // R8_SNORM
+    {GL_R8I, GL_RED_INTEGER, GL_BYTE},                                // R8_SINT
+    {GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE},                      // R8_UINT
+    {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},                             // R16G16B16A16_FLOAT
+    {GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},                          // R16G16B16A16_UNORM
+    {GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},                             // R16G16B16A16_SNORM
+    {GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT},                          // R16G16B16A16_SINT
+    {GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT},                // R16G16B16A16_UINT
+    {GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV},     // B10G11R11_FLOAT
+    {GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT},                  // R32G32B32A32_UINT
+    {GL_COMPRESSED_RGBA_S3TC_DXT1_EXT},                               // BC1_RGBA_UNORM
+    {GL_COMPRESSED_RGBA_S3TC_DXT3_EXT},                               // BC2_UNORM
+    {GL_COMPRESSED_RGBA_S3TC_DXT5_EXT},                               // BC3_UNORM
+    {GL_COMPRESSED_RED_RGTC1},                                        // BC4_UNORM
+    {GL_COMPRESSED_SIGNED_RED_RGTC1},                                 // BC4_SNORM
+    {GL_COMPRESSED_RG_RGTC2},                                         // BC5_UNORM
+    {GL_COMPRESSED_SIGNED_RG_RGTC2},                                  // BC5_SNORM
+    {GL_COMPRESSED_RGBA_BPTC_UNORM},                                  // BC7_UNORM
+    {GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT},                          // BC6H_UFLOAT
+    {GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT},                            // BC6H_SFLOAT
+    {GL_COMPRESSED_RGBA_ASTC_4x4_KHR},                                // ASTC_2D_4X4_UNORM
+    {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},                            // B8G8R8A8_UNORM
+    {GL_RGBA32F, GL_RGBA, GL_FLOAT},                                  // R32G32B32A32_FLOAT
+    {GL_RGBA32I, GL_RGBA_INTEGER, GL_INT},                            // R32G32B32A32_SINT
+    {GL_RG32F, GL_RG, GL_FLOAT},                                      // R32G32_FLOAT
+    {GL_RG32I, GL_RG_INTEGER, GL_INT},                                // R32G32_SINT
+    {GL_R32F, GL_RED, GL_FLOAT},                                      // R32_FLOAT
+    {GL_R16F, GL_RED, GL_HALF_FLOAT},                                 // R16_FLOAT
+    {GL_R16, GL_RED, GL_UNSIGNED_SHORT},                              // R16_UNORM
+    {GL_R16_SNORM, GL_RED, GL_SHORT},                                 // R16_SNORM
+    {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT},                    // R16_UINT
+    {GL_R16I, GL_RED_INTEGER, GL_SHORT},                              // R16_SINT
+    {GL_RG16, GL_RG, GL_UNSIGNED_SHORT},                              // R16G16_UNORM
+    {GL_RG16F, GL_RG, GL_HALF_FLOAT},                                 // R16G16_FLOAT
+    {GL_RG16UI, GL_RG_INTEGER, GL_UNSIGNED_SHORT},                    // R16G16_UINT
+    {GL_RG16I, GL_RG_INTEGER, GL_SHORT},                              // R16G16_SINT
+    {GL_RG16_SNORM, GL_RG, GL_SHORT},                                 // R16G16_SNORM
+    {GL_RGB32F, GL_RGB, GL_FLOAT},                                    // R32G32B32_FLOAT
+    {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV},          // A8B8G8R8_SRGB
+    {GL_RG8, GL_RG, GL_UNSIGNED_BYTE},                                // R8G8_UNORM
+    {GL_RG8_SNORM, GL_RG, GL_BYTE},                                   // R8G8_SNORM
+    {GL_RG8I, GL_RG_INTEGER, GL_BYTE},                                // R8G8_SINT
+    {GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE},                      // R8G8_UINT
+    {GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT},                      // R32G32_UINT
+    {GL_RGB16F, GL_RGBA, GL_HALF_FLOAT},                              // R16G16B16X16_FLOAT
+    {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT},                      // R32_UINT
+    {GL_R32I, GL_RED_INTEGER, GL_INT},                                // R32_SINT
+    {GL_COMPRESSED_RGBA_ASTC_8x8_KHR},                                // ASTC_2D_8X8_UNORM
+    {GL_COMPRESSED_RGBA_ASTC_8x5_KHR},                                // ASTC_2D_8X5_UNORM
+    {GL_COMPRESSED_RGBA_ASTC_5x4_KHR},                                // ASTC_2D_5X4_UNORM
+    {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},                     // B8G8R8A8_SRGB
+    {GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT},                         // BC1_RGBA_SRGB
+    {GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT},                         // BC2_SRGB
+    {GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT},                         // BC3_SRGB
+    {GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM},                            // BC7_SRGB
+    {GL_RGBA4, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4_REV},               // A4B4G4R4_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR},                        // ASTC_2D_4X4_SRGB
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR},                        // ASTC_2D_8X8_SRGB
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR},                        // ASTC_2D_8X5_SRGB
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR},                        // ASTC_2D_5X4_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_5x5_KHR},                                // ASTC_2D_5X5_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR},                        // ASTC_2D_5X5_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_10x8_KHR},                               // ASTC_2D_10X8_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR},                       // ASTC_2D_10X8_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_6x6_KHR},                                // ASTC_2D_6X6_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR},                        // ASTC_2D_6X6_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_10x10_KHR},                              // ASTC_2D_10X10_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR},                      // ASTC_2D_10X10_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_12x12_KHR},                              // ASTC_2D_12X12_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR},                      // ASTC_2D_12X12_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_8x6_KHR},                                // ASTC_2D_8X6_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR},                        // ASTC_2D_8X6_SRGB
+    {GL_COMPRESSED_RGBA_ASTC_6x5_KHR},                                // ASTC_2D_6X5_UNORM
+    {GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR},                        // ASTC_2D_6X5_SRGB
+    {GL_RGB9_E5, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV},                // E5B9G9R9_FLOAT
+    {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT},            // D32_FLOAT
+    {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT},    // D16_UNORM
+    {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8},    // D24_UNORM_S8_UINT
+    {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8},    // S8_UINT_D24_UNORM
     {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL,
      GL_FLOAT_32_UNSIGNED_INT_24_8_REV}, // D32_FLOAT_S8_UINT
 }};
@@ -308,7 +307,8 @@ void ApplySwizzle(GLuint handle, PixelFormat format, std::array<SwizzleSource, 4
 
 [[nodiscard]] bool CanBeAccelerated(const TextureCacheRuntime& runtime,
                                     const VideoCommon::ImageInfo& info) {
-    // Disable accelerated uploads for now as they don't implement swizzled uploads
+    return !runtime.HasNativeASTC() && IsPixelFormatASTC(info.format);
+    // Disable other accelerated uploads for now as they don't implement swizzled uploads
     return false;
     switch (info.type) {
     case ImageType::e2D:
@@ -397,10 +397,18 @@ void AttachTexture(GLuint fbo, GLenum attachment, const ImageView* image_view) {
     }
 }
 
-} // Anonymous namespace
+[[nodiscard]] bool IsPixelFormatBGR(PixelFormat format) {
+    switch (format) {
+    case PixelFormat::B5G6R5_UNORM:
+    case PixelFormat::B8G8R8A8_UNORM:
+    case PixelFormat::B8G8R8A8_SRGB:
+        return true;
+    default:
+        return false;
+    }
+}
 
-ImageBufferMap::ImageBufferMap(GLuint handle_, u8* map, size_t size, OGLSync* sync_)
-    : span(map, size), sync{sync_}, handle{handle_} {}
+} // Anonymous namespace
 
 ImageBufferMap::~ImageBufferMap() {
     if (sync) {
@@ -431,6 +439,8 @@ TextureCacheRuntime::TextureCacheRuntime(const Device& device_, ProgramManager& 
             format_properties[i].emplace(format, properties);
         }
     }
+    has_broken_texture_view_formats = device.HasBrokenTextureViewFormats();
+
     null_image_1d_array.Create(GL_TEXTURE_1D_ARRAY);
     null_image_cube_array.Create(GL_TEXTURE_CUBE_MAP_ARRAY);
     null_image_3d.Create(GL_TEXTURE_3D);
@@ -486,11 +496,11 @@ void TextureCacheRuntime::Finish() {
     glFinish();
 }
 
-ImageBufferMap TextureCacheRuntime::MapUploadBuffer(size_t size) {
+ImageBufferMap TextureCacheRuntime::UploadStagingBuffer(size_t size) {
     return upload_buffers.RequestMap(size, true);
 }
 
-ImageBufferMap TextureCacheRuntime::MapDownloadBuffer(size_t size) {
+ImageBufferMap TextureCacheRuntime::DownloadStagingBuffer(size_t size) {
     return download_buffers.RequestMap(size, false);
 }
 
@@ -514,6 +524,9 @@ bool TextureCacheRuntime::CanImageBeCopied(const Image& dst, const Image& src) {
     if (dst.info.type == ImageType::e3D && dst.info.format == PixelFormat::BC4_UNORM) {
         return false;
     }
+    if (IsPixelFormatBGR(dst.info.format) || IsPixelFormatBGR(src.info.format)) {
+        return false;
+    }
     return true;
 }
 
@@ -522,14 +535,15 @@ void TextureCacheRuntime::EmulateCopyImage(Image& dst, Image& src,
     if (dst.info.type == ImageType::e3D && dst.info.format == PixelFormat::BC4_UNORM) {
         ASSERT(src.info.type == ImageType::e3D);
         util_shaders.CopyBC4(dst, src, copies);
+    } else if (IsPixelFormatBGR(dst.info.format) || IsPixelFormatBGR(src.info.format)) {
+        util_shaders.CopyBGR(dst, src, copies);
     } else {
         UNREACHABLE();
     }
 }
 
 void TextureCacheRuntime::BlitFramebuffer(Framebuffer* dst, Framebuffer* src,
-                                          const std::array<Offset2D, 2>& dst_region,
-                                          const std::array<Offset2D, 2>& src_region,
+                                          const Region2D& dst_region, const Region2D& src_region,
                                           Tegra::Engines::Fermi2D::Filter filter,
                                           Tegra::Engines::Fermi2D::Operation operation) {
     state_tracker.NotifyScissor0();
@@ -545,22 +559,25 @@ void TextureCacheRuntime::BlitFramebuffer(Framebuffer* dst, Framebuffer* src,
     const GLbitfield buffer_bits = dst->BufferBits();
     const bool has_depth = (buffer_bits & ~GL_COLOR_BUFFER_BIT) != 0;
     const bool is_linear = !has_depth && filter == Tegra::Engines::Fermi2D::Filter::Bilinear;
-    glBlitNamedFramebuffer(src->Handle(), dst->Handle(), src_region[0].x, src_region[0].y,
-                           src_region[1].x, src_region[1].y, dst_region[0].x, dst_region[0].y,
-                           dst_region[1].x, dst_region[1].y, buffer_bits,
+    glBlitNamedFramebuffer(src->Handle(), dst->Handle(), src_region.start.x, src_region.start.y,
+                           src_region.end.x, src_region.end.y, dst_region.start.x,
+                           dst_region.start.y, dst_region.end.x, dst_region.end.y, buffer_bits,
                            is_linear ? GL_LINEAR : GL_NEAREST);
 }
 
 void TextureCacheRuntime::AccelerateImageUpload(Image& image, const ImageBufferMap& map,
-                                                size_t buffer_offset,
                                                 std::span<const SwizzleParameters> swizzles) {
     switch (image.info.type) {
     case ImageType::e2D:
-        return util_shaders.BlockLinearUpload2D(image, map, buffer_offset, swizzles);
+        if (IsPixelFormatASTC(image.info.format)) {
+            return util_shaders.ASTCDecode(image, map, swizzles);
+        } else {
+            return util_shaders.BlockLinearUpload2D(image, map, swizzles);
+        }
     case ImageType::e3D:
-        return util_shaders.BlockLinearUpload3D(image, map, buffer_offset, swizzles);
+        return util_shaders.BlockLinearUpload3D(image, map, swizzles);
     case ImageType::Linear:
-        return util_shaders.PitchUpload(image, map, buffer_offset, swizzles);
+        return util_shaders.PitchUpload(image, map, swizzles);
     default:
         UNREACHABLE();
         break;
@@ -586,6 +603,10 @@ FormatProperties TextureCacheRuntime::FormatInfo(ImageType type, GLenum internal
     }
 }
 
+bool TextureCacheRuntime::HasNativeASTC() const noexcept {
+    return device.HasASTC();
+}
+
 TextureCacheRuntime::StagingBuffers::StagingBuffers(GLenum storage_flags_, GLenum map_flags_)
     : storage_flags{storage_flags_}, map_flags{map_flags_} {}
 
@@ -595,7 +616,11 @@ ImageBufferMap TextureCacheRuntime::StagingBuffers::RequestMap(size_t requested_
                                                                bool insert_fence) {
     const size_t index = RequestBuffer(requested_size);
     OGLSync* const sync = insert_fence ? &syncs[index] : nullptr;
-    return ImageBufferMap(buffers[index].handle, maps[index], requested_size, sync);
+    return ImageBufferMap{
+        .mapped_span = std::span(maps[index], requested_size),
+        .sync = sync,
+        .buffer = buffers[index].handle,
+    };
 }
 
 size_t TextureCacheRuntime::StagingBuffers::RequestBuffer(size_t requested_size) {
@@ -651,13 +676,11 @@ Image::Image(TextureCacheRuntime& runtime, const VideoCommon::ImageInfo& info_, 
     if (IsConverted(runtime.device, info.format, info.type)) {
         flags |= ImageFlagBits::Converted;
         gl_internal_format = IsPixelFormatSRGB(info.format) ? GL_SRGB8_ALPHA8 : GL_RGBA8;
-        gl_store_format = GL_RGBA8;
         gl_format = GL_RGBA;
         gl_type = GL_UNSIGNED_INT_8_8_8_8_REV;
     } else {
         const auto& tuple = GetFormatTuple(info.format);
         gl_internal_format = tuple.internal_format;
-        gl_store_format = tuple.store_format;
         gl_format = tuple.format;
         gl_type = tuple.type;
     }
@@ -677,23 +700,23 @@ Image::Image(TextureCacheRuntime& runtime, const VideoCommon::ImageInfo& info_, 
     }
     switch (target) {
     case GL_TEXTURE_1D_ARRAY:
-        glTextureStorage2D(handle, num_levels, gl_store_format, width, num_layers);
+        glTextureStorage2D(handle, num_levels, gl_internal_format, width, num_layers);
         break;
     case GL_TEXTURE_2D_ARRAY:
-        glTextureStorage3D(handle, num_levels, gl_store_format, width, height, num_layers);
+        glTextureStorage3D(handle, num_levels, gl_internal_format, width, height, num_layers);
         break;
     case GL_TEXTURE_2D_MULTISAMPLE_ARRAY: {
         // TODO: Where should 'fixedsamplelocations' come from?
         const auto [samples_x, samples_y] = SamplesLog2(info.num_samples);
-        glTextureStorage3DMultisample(handle, num_samples, gl_store_format, width >> samples_x,
+        glTextureStorage3DMultisample(handle, num_samples, gl_internal_format, width >> samples_x,
                                       height >> samples_y, num_layers, GL_FALSE);
         break;
     }
     case GL_TEXTURE_RECTANGLE:
-        glTextureStorage2D(handle, num_levels, gl_store_format, width, height);
+        glTextureStorage2D(handle, num_levels, gl_internal_format, width, height);
         break;
     case GL_TEXTURE_3D:
-        glTextureStorage3D(handle, num_levels, gl_store_format, width, height, depth);
+        glTextureStorage3D(handle, num_levels, gl_internal_format, width, height, depth);
         break;
     case GL_TEXTURE_BUFFER:
         buffer.Create();
@@ -710,10 +733,10 @@ Image::Image(TextureCacheRuntime& runtime, const VideoCommon::ImageInfo& info_, 
     }
 }
 
-void Image::UploadMemory(const ImageBufferMap& map, size_t buffer_offset,
+void Image::UploadMemory(const ImageBufferMap& map,
                          std::span<const VideoCommon::BufferImageCopy> copies) {
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, map.Handle());
-    glFlushMappedBufferRange(GL_PIXEL_UNPACK_BUFFER, buffer_offset, unswizzled_size_bytes);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, map.buffer);
+    glFlushMappedBufferRange(GL_PIXEL_UNPACK_BUFFER, map.offset, unswizzled_size_bytes);
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
@@ -729,23 +752,23 @@ void Image::UploadMemory(const ImageBufferMap& map, size_t buffer_offset,
             current_image_height = copy.buffer_image_height;
             glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, current_image_height);
         }
-        CopyBufferToImage(copy, buffer_offset);
+        CopyBufferToImage(copy, map.offset);
     }
 }
 
-void Image::UploadMemory(const ImageBufferMap& map, size_t buffer_offset,
+void Image::UploadMemory(const ImageBufferMap& map,
                          std::span<const VideoCommon::BufferCopy> copies) {
     for (const VideoCommon::BufferCopy& copy : copies) {
-        glCopyNamedBufferSubData(map.Handle(), buffer.handle, copy.src_offset + buffer_offset,
+        glCopyNamedBufferSubData(map.buffer, buffer.handle, copy.src_offset + map.offset,
                                  copy.dst_offset, copy.size);
     }
 }
 
-void Image::DownloadMemory(ImageBufferMap& map, size_t buffer_offset,
+void Image::DownloadMemory(ImageBufferMap& map,
                            std::span<const VideoCommon::BufferImageCopy> copies) {
     glMemoryBarrier(GL_PIXEL_BUFFER_BARRIER_BIT); // TODO: Move this to its own API
 
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, map.Handle());
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, map.buffer);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
     u32 current_row_length = std::numeric_limits<u32>::max();
@@ -760,7 +783,38 @@ void Image::DownloadMemory(ImageBufferMap& map, size_t buffer_offset,
             current_image_height = copy.buffer_image_height;
             glPixelStorei(GL_PACK_IMAGE_HEIGHT, current_image_height);
         }
-        CopyImageToBuffer(copy, buffer_offset);
+        CopyImageToBuffer(copy, map.offset);
+    }
+}
+
+GLuint Image::StorageHandle() noexcept {
+    switch (info.format) {
+    case PixelFormat::A8B8G8R8_SRGB:
+    case PixelFormat::B8G8R8A8_SRGB:
+    case PixelFormat::BC1_RGBA_SRGB:
+    case PixelFormat::BC2_SRGB:
+    case PixelFormat::BC3_SRGB:
+    case PixelFormat::BC7_SRGB:
+    case PixelFormat::ASTC_2D_4X4_SRGB:
+    case PixelFormat::ASTC_2D_8X8_SRGB:
+    case PixelFormat::ASTC_2D_8X5_SRGB:
+    case PixelFormat::ASTC_2D_5X4_SRGB:
+    case PixelFormat::ASTC_2D_5X5_SRGB:
+    case PixelFormat::ASTC_2D_10X8_SRGB:
+    case PixelFormat::ASTC_2D_6X6_SRGB:
+    case PixelFormat::ASTC_2D_10X10_SRGB:
+    case PixelFormat::ASTC_2D_12X12_SRGB:
+    case PixelFormat::ASTC_2D_8X6_SRGB:
+    case PixelFormat::ASTC_2D_6X5_SRGB:
+        if (store_view.handle != 0) {
+            return store_view.handle;
+        }
+        store_view.Create();
+        glTextureView(store_view.handle, ImageTarget(info), texture.handle, GL_RGBA8, 0,
+                      info.resources.levels, 0, info.resources.layers);
+        return store_view.handle;
+    default:
+        return texture.handle;
     }
 }
 

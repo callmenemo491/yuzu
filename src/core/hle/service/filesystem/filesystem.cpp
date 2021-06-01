@@ -5,7 +5,8 @@
 #include <utility>
 
 #include "common/assert.h"
-#include "common/file_util.h"
+#include "common/fs/path_util.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/bis_factory.h"
 #include "core/file_sys/card_image.h"
@@ -20,13 +21,12 @@
 #include "core/file_sys/sdmc_factory.h"
 #include "core/file_sys/vfs.h"
 #include "core/file_sys/vfs_offset.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp_ldr.h"
 #include "core/hle/service/filesystem/fsp_pr.h"
 #include "core/hle/service/filesystem/fsp_srv.h"
 #include "core/loader/loader.h"
-#include "core/settings.h"
 
 namespace Service::FileSystem {
 
@@ -55,10 +55,15 @@ std::string VfsDirectoryServiceWrapper::GetName() const {
 ResultCode VfsDirectoryServiceWrapper::CreateFile(const std::string& path_, u64 size) const {
     std::string path(Common::FS::SanitizePath(path_));
     auto dir = GetDirectoryRelativeWrapped(backing, Common::FS::GetParentPath(path));
-    // dir can be nullptr if path contains subdirectories, create those prior to creating the file.
     if (dir == nullptr) {
-        dir = backing->CreateSubdirectory(Common::FS::GetParentPath(path));
+        return FileSys::ERROR_PATH_NOT_FOUND;
     }
+
+    const auto entry_type = GetEntryType(path);
+    if (entry_type.Code() == RESULT_SUCCESS) {
+        return FileSys::ERROR_PATH_ALREADY_EXISTS;
+    }
+
     auto file = dir->CreateFile(Common::FS::GetFilename(path));
     if (file == nullptr) {
         // TODO(DarkLordZach): Find a better error code for this
@@ -723,14 +728,17 @@ void FileSystemController::CreateFactories(FileSys::VfsFilesystem& vfs, bool ove
         sdmc_factory = nullptr;
     }
 
-    auto nand_directory = vfs.OpenDirectory(Common::FS::GetUserPath(Common::FS::UserPath::NANDDir),
-                                            FileSys::Mode::ReadWrite);
-    auto sd_directory = vfs.OpenDirectory(Common::FS::GetUserPath(Common::FS::UserPath::SDMCDir),
-                                          FileSys::Mode::ReadWrite);
-    auto load_directory = vfs.OpenDirectory(Common::FS::GetUserPath(Common::FS::UserPath::LoadDir),
-                                            FileSys::Mode::ReadWrite);
-    auto dump_directory = vfs.OpenDirectory(Common::FS::GetUserPath(Common::FS::UserPath::DumpDir),
-                                            FileSys::Mode::ReadWrite);
+    using YuzuPath = Common::FS::YuzuPath;
+    const auto rw_mode = FileSys::Mode::ReadWrite;
+
+    auto nand_directory =
+        vfs.OpenDirectory(Common::FS::GetYuzuPathString(YuzuPath::NANDDir), rw_mode);
+    auto sd_directory =
+        vfs.OpenDirectory(Common::FS::GetYuzuPathString(YuzuPath::SDMCDir), rw_mode);
+    auto load_directory =
+        vfs.OpenDirectory(Common::FS::GetYuzuPathString(YuzuPath::LoadDir), FileSys::Mode::Read);
+    auto dump_directory =
+        vfs.OpenDirectory(Common::FS::GetYuzuPathString(YuzuPath::DumpDir), rw_mode);
 
     if (bis_factory == nullptr) {
         bis_factory =

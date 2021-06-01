@@ -11,18 +11,25 @@
 #include "common/common_types.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_memory_allocator.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
+
+namespace VideoCommon {
+struct SwizzleParameters;
+}
 
 namespace Vulkan {
 
-class VKDevice;
+class Device;
+class StagingBufferPool;
 class VKScheduler;
-class VKStagingBufferPool;
 class VKUpdateDescriptorQueue;
+class Image;
+struct StagingBufferRef;
 
 class VKComputePass {
 public:
-    explicit VKComputePass(const VKDevice& device, VKDescriptorPool& descriptor_pool,
+    explicit VKComputePass(const Device& device, VKDescriptorPool& descriptor_pool,
                            vk::Span<VkDescriptorSetLayoutBinding> bindings,
                            vk::Span<VkDescriptorUpdateTemplateEntryKHR> templates,
                            vk::Span<VkPushConstantRange> push_constants, std::span<const u32> code);
@@ -41,54 +48,65 @@ private:
     vk::ShaderModule module;
 };
 
-class QuadArrayPass final : public VKComputePass {
-public:
-    explicit QuadArrayPass(const VKDevice& device_, VKScheduler& scheduler_,
-                           VKDescriptorPool& descriptor_pool_,
-                           VKStagingBufferPool& staging_buffer_pool_,
-                           VKUpdateDescriptorQueue& update_descriptor_queue_);
-    ~QuadArrayPass();
-
-    std::pair<VkBuffer, VkDeviceSize> Assemble(u32 num_vertices, u32 first);
-
-private:
-    VKScheduler& scheduler;
-    VKStagingBufferPool& staging_buffer_pool;
-    VKUpdateDescriptorQueue& update_descriptor_queue;
-};
-
 class Uint8Pass final : public VKComputePass {
 public:
-    explicit Uint8Pass(const VKDevice& device_, VKScheduler& scheduler_,
-                       VKDescriptorPool& descriptor_pool_,
-                       VKStagingBufferPool& staging_buffer_pool_,
+    explicit Uint8Pass(const Device& device_, VKScheduler& scheduler_,
+                       VKDescriptorPool& descriptor_pool_, StagingBufferPool& staging_buffer_pool_,
                        VKUpdateDescriptorQueue& update_descriptor_queue_);
     ~Uint8Pass();
 
-    std::pair<VkBuffer, u64> Assemble(u32 num_vertices, VkBuffer src_buffer, u64 src_offset);
+    /// Assemble uint8 indices into an uint16 index buffer
+    /// Returns a pair with the staging buffer, and the offset where the assembled data is
+    std::pair<VkBuffer, VkDeviceSize> Assemble(u32 num_vertices, VkBuffer src_buffer,
+                                               u32 src_offset);
 
 private:
     VKScheduler& scheduler;
-    VKStagingBufferPool& staging_buffer_pool;
+    StagingBufferPool& staging_buffer_pool;
     VKUpdateDescriptorQueue& update_descriptor_queue;
 };
 
 class QuadIndexedPass final : public VKComputePass {
 public:
-    explicit QuadIndexedPass(const VKDevice& device_, VKScheduler& scheduler_,
+    explicit QuadIndexedPass(const Device& device_, VKScheduler& scheduler_,
                              VKDescriptorPool& descriptor_pool_,
-                             VKStagingBufferPool& staging_buffer_pool_,
+                             StagingBufferPool& staging_buffer_pool_,
                              VKUpdateDescriptorQueue& update_descriptor_queue_);
     ~QuadIndexedPass();
 
-    std::pair<VkBuffer, u64> Assemble(Tegra::Engines::Maxwell3D::Regs::IndexFormat index_format,
-                                      u32 num_vertices, u32 base_vertex, VkBuffer src_buffer,
-                                      u64 src_offset);
+    std::pair<VkBuffer, VkDeviceSize> Assemble(
+        Tegra::Engines::Maxwell3D::Regs::IndexFormat index_format, u32 num_vertices,
+        u32 base_vertex, VkBuffer src_buffer, u32 src_offset);
 
 private:
     VKScheduler& scheduler;
-    VKStagingBufferPool& staging_buffer_pool;
+    StagingBufferPool& staging_buffer_pool;
     VKUpdateDescriptorQueue& update_descriptor_queue;
+};
+
+class ASTCDecoderPass final : public VKComputePass {
+public:
+    explicit ASTCDecoderPass(const Device& device_, VKScheduler& scheduler_,
+                             VKDescriptorPool& descriptor_pool_,
+                             StagingBufferPool& staging_buffer_pool_,
+                             VKUpdateDescriptorQueue& update_descriptor_queue_,
+                             MemoryAllocator& memory_allocator_);
+    ~ASTCDecoderPass();
+
+    void Assemble(Image& image, const StagingBufferRef& map,
+                  std::span<const VideoCommon::SwizzleParameters> swizzles);
+
+private:
+    void MakeDataBuffer();
+
+    const Device& device;
+    VKScheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
+    VKUpdateDescriptorQueue& update_descriptor_queue;
+    MemoryAllocator& memory_allocator;
+
+    vk::Buffer data_buffer;
+    MemoryCommit data_buffer_commit;
 };
 
 } // namespace Vulkan

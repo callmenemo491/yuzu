@@ -7,11 +7,12 @@
 #include <regex>
 #include <mbedtls/sha256.h>
 #include "common/assert.h"
-#include "common/file_util.h"
+#include "common/fs/path_util.h"
 #include "common/hex_util.h"
 #include "common/logging/log.h"
 #include "core/crypto/key_manager.h"
 #include "core/file_sys/card_image.h"
+#include "core/file_sys/common_funcs.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/registered_cache.h"
@@ -105,7 +106,8 @@ ContentRecordType GetCRTypeFromNCAType(NCAContentType type) {
         // TODO(DarkLordZach): Peek at NCA contents to differentiate Manual and Legal.
         return ContentRecordType::HtmlDocument;
     default:
-        UNREACHABLE_MSG("Invalid NCAContentType={:02X}", static_cast<u8>(type));
+        UNREACHABLE_MSG("Invalid NCAContentType={:02X}", type);
+        return ContentRecordType{};
     }
 }
 
@@ -280,14 +282,14 @@ NcaID PlaceholderCache::Generate() {
     return out;
 }
 
-VirtualFile RegisteredCache::OpenFileOrDirectoryConcat(const VirtualDir& dir,
+VirtualFile RegisteredCache::OpenFileOrDirectoryConcat(const VirtualDir& open_dir,
                                                        std::string_view path) const {
-    const auto file = dir->GetFileRelative(path);
+    const auto file = open_dir->GetFileRelative(path);
     if (file != nullptr) {
         return file;
     }
 
-    const auto nca_dir = dir->GetDirectoryRelative(path);
+    const auto nca_dir = open_dir->GetDirectoryRelative(path);
     if (nca_dir == nullptr) {
         return nullptr;
     }
@@ -430,13 +432,15 @@ void RegisteredCache::ProcessFiles(const std::vector<NcaID>& ids) {
 }
 
 void RegisteredCache::AccumulateYuzuMeta() {
-    const auto dir = this->dir->GetSubdirectory("yuzu_meta");
-    if (dir == nullptr)
+    const auto meta_dir = dir->GetSubdirectory("yuzu_meta");
+    if (meta_dir == nullptr) {
         return;
+    }
 
-    for (const auto& file : dir->GetFiles()) {
-        if (file->GetExtension() != "cnmt")
+    for (const auto& file : meta_dir->GetFiles()) {
+        if (file->GetExtension() != "cnmt") {
             continue;
+        }
 
         CNMT cnmt(file);
         yuzu_meta.insert_or_assign(cnmt.GetTitleID(), std::move(cnmt));
@@ -444,8 +448,10 @@ void RegisteredCache::AccumulateYuzuMeta() {
 }
 
 void RegisteredCache::Refresh() {
-    if (dir == nullptr)
+    if (dir == nullptr) {
         return;
+    }
+
     const auto ids = AccumulateFiles();
     ProcessFiles(ids);
     AccumulateYuzuMeta();
@@ -565,7 +571,7 @@ InstallResult RegisteredCache::InstallEntry(const NSP& nsp, bool overwrite_if_ex
     }
 
     const auto meta_id_raw = (*meta_iter)->GetName().substr(0, 32);
-    const auto meta_id = Common::HexStringToArray<16>(meta_id_raw);
+    const auto meta_id_data = Common::HexStringToArray<16>(meta_id_raw);
 
     if ((*meta_iter)->GetSubdirectories().empty()) {
         LOG_ERROR(Loader,
@@ -587,10 +593,16 @@ InstallResult RegisteredCache::InstallEntry(const NSP& nsp, bool overwrite_if_ex
     const CNMT cnmt(cnmt_file);
 
     const auto title_id = cnmt.GetTitleID();
+    const auto version = cnmt.GetTitleVersion();
+
+    if (title_id == GetBaseTitleID(title_id) && version == 0) {
+        return InstallResult::ErrorBaseInstall;
+    }
+
     const auto result = RemoveExistingEntry(title_id);
 
     // Install Metadata File
-    const auto res = RawInstallNCA(**meta_iter, copy, overwrite_if_exists, meta_id);
+    const auto res = RawInstallNCA(**meta_iter, copy, overwrite_if_exists, meta_id_data);
     if (res != InstallResult::Success) {
         return res;
     }
@@ -740,15 +752,15 @@ InstallResult RegisteredCache::RawInstallNCA(const NCA& nca, const VfsCopyFuncti
 
 bool RegisteredCache::RawInstallYuzuMeta(const CNMT& cnmt) {
     // Reasoning behind this method can be found in the comment for InstallEntry, NCA overload.
-    const auto dir = this->dir->CreateDirectoryRelative("yuzu_meta");
+    const auto meta_dir = dir->CreateDirectoryRelative("yuzu_meta");
     const auto filename = GetCNMTName(cnmt.GetType(), cnmt.GetTitleID());
-    if (dir->GetFile(filename) == nullptr) {
-        auto out = dir->CreateFile(filename);
+    if (meta_dir->GetFile(filename) == nullptr) {
+        auto out = meta_dir->CreateFile(filename);
         const auto buffer = cnmt.Serialize();
         out->Resize(buffer.size());
         out->WriteBytes(buffer);
     } else {
-        auto out = dir->GetFile(filename);
+        auto out = meta_dir->GetFile(filename);
         CNMT old_cnmt(out);
         // Returns true on change
         if (old_cnmt.UnionRecords(cnmt)) {

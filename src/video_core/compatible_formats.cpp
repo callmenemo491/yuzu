@@ -10,9 +10,7 @@
 #include "video_core/surface.h"
 
 namespace VideoCore::Surface {
-
 namespace {
-
 using Table = std::array<std::array<u64, 2>, MaxPixelFormat>;
 
 // Compatibility table taken from Table 3.X.2 in:
@@ -48,6 +46,15 @@ constexpr std::array VIEW_CLASS_32_BITS{
     PixelFormat::A8B8G8R8_SRGB,     PixelFormat::E5B9G9R9_FLOAT,  PixelFormat::B8G8R8A8_UNORM,
     PixelFormat::B8G8R8A8_SRGB,     PixelFormat::A8B8G8R8_UINT,   PixelFormat::A8B8G8R8_SINT,
     PixelFormat::A2B10G10R10_UINT,
+};
+
+constexpr std::array VIEW_CLASS_32_BITS_NO_BGR{
+    PixelFormat::R16G16_FLOAT,      PixelFormat::B10G11R11_FLOAT,  PixelFormat::R32_FLOAT,
+    PixelFormat::A2B10G10R10_UNORM, PixelFormat::R16G16_UINT,      PixelFormat::R32_UINT,
+    PixelFormat::R16G16_SINT,       PixelFormat::R32_SINT,         PixelFormat::A8B8G8R8_UNORM,
+    PixelFormat::R16G16_UNORM,      PixelFormat::A8B8G8R8_SNORM,   PixelFormat::R16G16_SNORM,
+    PixelFormat::A8B8G8R8_SRGB,     PixelFormat::E5B9G9R9_FLOAT,   PixelFormat::A8B8G8R8_UINT,
+    PixelFormat::A8B8G8R8_SINT,     PixelFormat::A2B10G10R10_UINT,
 };
 
 // TODO: How should we handle 24 bits?
@@ -207,7 +214,6 @@ constexpr Table MakeViewTable() {
     EnableRange(view, VIEW_CLASS_128_BITS);
     EnableRange(view, VIEW_CLASS_96_BITS);
     EnableRange(view, VIEW_CLASS_64_BITS);
-    EnableRange(view, VIEW_CLASS_32_BITS);
     EnableRange(view, VIEW_CLASS_16_BITS);
     EnableRange(view, VIEW_CLASS_8_BITS);
     EnableRange(view, VIEW_CLASS_RGTC1_RED);
@@ -234,16 +240,46 @@ constexpr Table MakeCopyTable() {
     return copy;
 }
 
-} // Anonymous namespace
-
-bool IsViewCompatible(PixelFormat format_a, PixelFormat format_b) {
-    static constexpr Table TABLE = MakeViewTable();
-    return IsSupported(TABLE, format_a, format_b);
+constexpr Table MakeNativeBgrViewTable() {
+    Table copy = MakeViewTable();
+    EnableRange(copy, VIEW_CLASS_32_BITS);
+    return copy;
 }
 
-bool IsCopyCompatible(PixelFormat format_a, PixelFormat format_b) {
-    static constexpr Table TABLE = MakeCopyTable();
-    return IsSupported(TABLE, format_a, format_b);
+constexpr Table MakeNonNativeBgrViewTable() {
+    Table copy = MakeViewTable();
+    EnableRange(copy, VIEW_CLASS_32_BITS_NO_BGR);
+    return copy;
+}
+
+constexpr Table MakeNativeBgrCopyTable() {
+    Table copy = MakeCopyTable();
+    EnableRange(copy, VIEW_CLASS_32_BITS);
+    return copy;
+}
+
+constexpr Table MakeNonNativeBgrCopyTable() {
+    Table copy = MakeCopyTable();
+    EnableRange(copy, VIEW_CLASS_32_BITS);
+    return copy;
+}
+} // Anonymous namespace
+
+bool IsViewCompatible(PixelFormat format_a, PixelFormat format_b, bool broken_views,
+                      bool native_bgr) {
+    if (broken_views) {
+        // If format views are broken, only accept formats that are identical.
+        return format_a == format_b;
+    }
+    static constexpr Table BGR_TABLE = MakeNativeBgrViewTable();
+    static constexpr Table NO_BGR_TABLE = MakeNonNativeBgrViewTable();
+    return IsSupported(native_bgr ? BGR_TABLE : NO_BGR_TABLE, format_a, format_b);
+}
+
+bool IsCopyCompatible(PixelFormat format_a, PixelFormat format_b, bool native_bgr) {
+    static constexpr Table BGR_TABLE = MakeNativeBgrCopyTable();
+    static constexpr Table NO_BGR_TABLE = MakeNonNativeBgrCopyTable();
+    return IsSupported(native_bgr ? BGR_TABLE : NO_BGR_TABLE, format_a, format_b);
 }
 
 } // namespace VideoCore::Surface

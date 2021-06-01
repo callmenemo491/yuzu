@@ -49,6 +49,7 @@ void CoreTiming::ThreadEntry(CoreTiming& instance) {
     Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
     instance.on_thread_init();
     instance.ThreadLoop();
+    MicroProfileOnThreadExit();
 }
 
 void CoreTiming::Initialize(std::function<void()>&& on_thread_init_) {
@@ -132,8 +133,8 @@ void CoreTiming::UnscheduleEvent(const std::shared_ptr<EventType>& event_type,
     }
 }
 
-void CoreTiming::AddTicks(u64 ticks) {
-    this->ticks += ticks;
+void CoreTiming::AddTicks(u64 ticks_to_add) {
+    ticks += ticks_to_add;
     downcount -= static_cast<s64>(ticks);
 }
 

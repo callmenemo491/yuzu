@@ -129,7 +129,7 @@ void MotionInput::UpdateOrientation(u64 elapsed_time) {
             rad_gyro += ki * integral_error;
             rad_gyro += kd * derivative_error;
         } else {
-            // Give more weight to acelerometer values to compensate for the lack of gyro
+            // Give more weight to accelerometer values to compensate for the lack of gyro
             rad_gyro += 35.0f * kp * real_error;
             rad_gyro += 10.0f * ki * integral_error;
             rad_gyro += 10.0f * kd * derivative_error;
@@ -195,7 +195,8 @@ Input::MotionStatus MotionInput::GetMotion() const {
     const Common::Vec3f accelerometer = GetAcceleration();
     const Common::Vec3f rotation = GetRotations();
     const std::array<Common::Vec3f, 3> orientation = GetOrientation();
-    return {accelerometer, gyroscope, rotation, orientation};
+    const Common::Quaternion<f32> quaternion = GetQuaternion();
+    return {accelerometer, gyroscope, rotation, orientation, quaternion};
 }
 
 Input::MotionStatus MotionInput::GetRandomMotion(int accel_magnitude, int gyro_magnitude) const {
@@ -218,7 +219,12 @@ Input::MotionStatus MotionInput::GetRandomMotion(int accel_magnitude, int gyro_m
         Common::Vec3f{0.0f, 1.0f, 0.0f},
         Common::Vec3f{0.0f, 0.0f, 1.0f},
     };
-    return {accelerometer * accel_magnitude, gyroscope * gyro_magnitude, rotation, orientation};
+    constexpr Common::Quaternion<f32> quaternion{
+        {0.0f, 0.0f, 0.0f},
+        1.0f,
+    };
+    return {accelerometer * accel_magnitude, gyroscope * gyro_magnitude, rotation, orientation,
+            quaternion};
 }
 
 void MotionInput::ResetOrientation() {

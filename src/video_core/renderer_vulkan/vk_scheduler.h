@@ -6,38 +6,31 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <memory>
 #include <stack>
 #include <thread>
 #include <utility>
+#include "common/alignment.h"
 #include "common/common_types.h"
 #include "common/threadsafe_queue.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/renderer_vulkan/vk_master_semaphore.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
 class CommandPool;
+class Device;
 class Framebuffer;
-class MasterSemaphore;
 class StateTracker;
-class VKDevice;
 class VKQueryCache;
 
 /// The scheduler abstracts command buffer and fence management with an interface that's able to do
 /// OpenGL-like operations on Vulkan command buffers.
 class VKScheduler {
 public:
-    explicit VKScheduler(const VKDevice& device, StateTracker& state_tracker);
+    explicit VKScheduler(const Device& device, StateTracker& state_tracker);
     ~VKScheduler();
-
-    /// Returns the current command buffer tick.
-    [[nodiscard]] u64 CurrentTick() const noexcept;
-
-    /// Returns true when a tick has been triggered by the GPU.
-    [[nodiscard]] bool IsFree(u64 tick) const noexcept;
-
-    /// Waits for the given tick to trigger on the GPU.
-    void Wait(u64 tick);
 
     /// Sends the current execution context to the GPU.
     void Flush(VkSemaphore semaphore = nullptr);
@@ -78,6 +71,21 @@ public:
         }
         DispatchWork();
         (void)chunk->Record(command);
+    }
+
+    /// Returns the current command buffer tick.
+    [[nodiscard]] u64 CurrentTick() const noexcept {
+        return master_semaphore->CurrentTick();
+    }
+
+    /// Returns true when a tick has been triggered by the GPU.
+    [[nodiscard]] bool IsFree(u64 tick) const noexcept {
+        return master_semaphore->IsFree(tick);
+    }
+
+    /// Waits for the given tick to trigger on the GPU.
+    void Wait(u64 tick) {
+        master_semaphore->Wait(tick);
     }
 
     /// Returns the master timeline semaphore.
@@ -130,12 +138,11 @@ private:
             using FuncType = TypedCommand<T>;
             static_assert(sizeof(FuncType) < sizeof(data), "Lambda is too large");
 
+            command_offset = Common::AlignUp(command_offset, alignof(FuncType));
             if (command_offset > sizeof(data) - sizeof(FuncType)) {
                 return false;
             }
-
-            Command* current_last = last;
-
+            Command* const current_last = last;
             last = new (data.data() + command_offset) FuncType(std::move(command));
 
             if (current_last) {
@@ -143,7 +150,6 @@ private:
             } else {
                 first = last;
             }
-
             command_offset += sizeof(FuncType);
             return true;
         }
@@ -156,8 +162,8 @@ private:
         Command* first = nullptr;
         Command* last = nullptr;
 
-        std::size_t command_offset = 0;
-        std::array<u8, 0x8000> data{};
+        size_t command_offset = 0;
+        alignas(std::max_align_t) std::array<u8, 0x8000> data{};
     };
 
     struct State {
@@ -179,7 +185,7 @@ private:
 
     void AcquireNewChunk();
 
-    const VKDevice& device;
+    const Device& device;
     StateTracker& state_tracker;
 
     std::unique_ptr<MasterSemaphore> master_semaphore;

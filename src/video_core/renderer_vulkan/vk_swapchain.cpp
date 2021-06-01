@@ -11,10 +11,10 @@
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
-#include "video_core/renderer_vulkan/vk_device.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_device.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
@@ -56,8 +56,11 @@ VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, u32 wi
 
 } // Anonymous namespace
 
-VKSwapchain::VKSwapchain(VkSurfaceKHR surface_, const VKDevice& device_, VKScheduler& scheduler_)
-    : surface{surface_}, device{device_}, scheduler{scheduler_} {}
+VKSwapchain::VKSwapchain(VkSurfaceKHR surface_, const Device& device_, VKScheduler& scheduler_,
+                         u32 width, u32 height, bool srgb)
+    : surface{surface_}, device{device_}, scheduler{scheduler_} {
+    Create(width, height, srgb);
+}
 
 VKSwapchain::~VKSwapchain() = default;
 
@@ -79,11 +82,13 @@ void VKSwapchain::Create(u32 width, u32 height, bool srgb) {
     resource_ticks.resize(image_count);
 }
 
-void VKSwapchain::AcquireNextImage() {
-    device.GetLogical().AcquireNextImageKHR(*swapchain, std::numeric_limits<u64>::max(),
-                                            *present_semaphores[frame_index], {}, &image_index);
+bool VKSwapchain::AcquireNextImage() {
+    const VkResult result =
+        device.GetLogical().AcquireNextImageKHR(*swapchain, std::numeric_limits<u64>::max(),
+                                                *present_semaphores[frame_index], {}, &image_index);
 
     scheduler.Wait(resource_ticks[image_index]);
+    return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
 }
 
 bool VKSwapchain::Present(VkSemaphore render_semaphore) {

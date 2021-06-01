@@ -4,14 +4,15 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
-#include "common/file_util.h"
+#include "common/fs/file.h"
 #include "common/logging/filter.h"
 #include "common/logging/log.h"
 
-namespace Log {
+namespace Common::Log {
 
 class Filter;
 
@@ -81,7 +82,7 @@ public:
  */
 class FileBackend : public Backend {
 public:
-    explicit FileBackend(const std::string& filename);
+    explicit FileBackend(const std::filesystem::path& filename);
 
     static const char* Name() {
         return "file";
@@ -94,8 +95,8 @@ public:
     void Write(const Entry& entry) override;
 
 private:
-    Common::FS::IOFile file;
-    std::size_t bytes_written;
+    FS::IOFile file;
+    std::size_t bytes_written = 0;
 };
 
 /**
@@ -135,4 +136,4 @@ const char* GetLevelName(Level log_level);
  * never get the message
  */
 void SetGlobalFilter(const Filter& filter);
-} // namespace Log
+} // namespace Common::Log

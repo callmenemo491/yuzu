@@ -12,7 +12,7 @@
 #include <QWebEngineUrlScheme>
 #endif
 
-#include "common/file_util.h"
+#include "common/fs/path_util.h"
 #include "core/core.h"
 #include "core/frontend/input_interpreter.h"
 #include "input_common/keyboard.h"
@@ -102,8 +102,8 @@ QtNXWebEngineView::~QtNXWebEngineView() {
     StopInputThread();
 }
 
-void QtNXWebEngineView::LoadLocalWebPage(std::string_view main_url,
-                                         std::string_view additional_args) {
+void QtNXWebEngineView::LoadLocalWebPage(const std::string& main_url,
+                                         const std::string& additional_args) {
     is_local = true;
 
     LoadExtractedFonts();
@@ -113,12 +113,12 @@ void QtNXWebEngineView::LoadLocalWebPage(std::string_view main_url,
     SetLastURL("http://localhost/");
     StartInputThread();
 
-    load(QUrl(QUrl::fromLocalFile(QString::fromStdString(std::string(main_url))).toString() +
-              QString::fromStdString(std::string(additional_args))));
+    load(QUrl(QUrl::fromLocalFile(QString::fromStdString(main_url)).toString() +
+              QString::fromStdString(additional_args)));
 }
 
-void QtNXWebEngineView::LoadExternalWebPage(std::string_view main_url,
-                                            std::string_view additional_args) {
+void QtNXWebEngineView::LoadExternalWebPage(const std::string& main_url,
+                                            const std::string& additional_args) {
     is_local = false;
 
     SetUserAgent(UserAgent::WebApplet);
@@ -127,8 +127,7 @@ void QtNXWebEngineView::LoadExternalWebPage(std::string_view main_url,
     SetLastURL("http://localhost/");
     StartInputThread();
 
-    load(QUrl(QString::fromStdString(std::string(main_url)) +
-              QString::fromStdString(std::string(additional_args))));
+    load(QUrl(QString::fromStdString(main_url) + QString::fromStdString(additional_args)));
 }
 
 void QtNXWebEngineView::SetUserAgent(UserAgent user_agent) {
@@ -323,21 +322,25 @@ void QtNXWebEngineView::LoadExtractedFonts() {
     QWebEngineScript nx_font_css;
     QWebEngineScript load_nx_font;
 
-    const QString fonts_dir = QString::fromStdString(Common::FS::SanitizePath(
-        fmt::format("{}/fonts", Common::FS::GetUserPath(Common::FS::UserPath::CacheDir))));
+    auto fonts_dir_str = Common::FS::PathToUTF8String(
+        Common::FS::GetYuzuPath(Common::FS::YuzuPath::CacheDir) / "fonts/");
+
+    std::replace(fonts_dir_str.begin(), fonts_dir_str.end(), '\\', '/');
+
+    const auto fonts_dir = QString::fromStdString(fonts_dir_str);
 
     nx_font_css.setName(QStringLiteral("nx_font_css.js"));
     load_nx_font.setName(QStringLiteral("load_nx_font.js"));
 
     nx_font_css.setSourceCode(
         QString::fromStdString(NX_FONT_CSS)
-            .arg(fonts_dir + QStringLiteral("/FontStandard.ttf"))
-            .arg(fonts_dir + QStringLiteral("/FontChineseSimplified.ttf"))
-            .arg(fonts_dir + QStringLiteral("/FontExtendedChineseSimplified.ttf"))
-            .arg(fonts_dir + QStringLiteral("/FontChineseTraditional.ttf"))
-            .arg(fonts_dir + QStringLiteral("/FontKorean.ttf"))
-            .arg(fonts_dir + QStringLiteral("/FontNintendoExtended.ttf"))
-            .arg(fonts_dir + QStringLiteral("/FontNintendoExtended2.ttf")));
+            .arg(fonts_dir + QStringLiteral("FontStandard.ttf"))
+            .arg(fonts_dir + QStringLiteral("FontChineseSimplified.ttf"))
+            .arg(fonts_dir + QStringLiteral("FontExtendedChineseSimplified.ttf"))
+            .arg(fonts_dir + QStringLiteral("FontChineseTraditional.ttf"))
+            .arg(fonts_dir + QStringLiteral("FontKorean.ttf"))
+            .arg(fonts_dir + QStringLiteral("FontNintendoExtended.ttf"))
+            .arg(fonts_dir + QStringLiteral("FontNintendoExtended2.ttf")));
     load_nx_font.setSourceCode(QString::fromStdString(LOAD_NX_FONT));
 
     nx_font_css.setInjectionPoint(QWebEngineScript::DocumentReady);
@@ -375,7 +378,7 @@ QtWebBrowser::QtWebBrowser(GMainWindow& main_window) {
 QtWebBrowser::~QtWebBrowser() = default;
 
 void QtWebBrowser::OpenLocalWebPage(
-    std::string_view local_url, std::function<void()> extract_romfs_callback_,
+    const std::string& local_url, std::function<void()> extract_romfs_callback_,
     std::function<void(Service::AM::Applets::WebExitReason, std::string)> callback_) const {
     extract_romfs_callback = std::move(extract_romfs_callback_);
     callback = std::move(callback_);
@@ -390,7 +393,7 @@ void QtWebBrowser::OpenLocalWebPage(
 }
 
 void QtWebBrowser::OpenExternalWebPage(
-    std::string_view external_url,
+    const std::string& external_url,
     std::function<void(Service::AM::Applets::WebExitReason, std::string)> callback_) const {
     callback = std::move(callback_);
 

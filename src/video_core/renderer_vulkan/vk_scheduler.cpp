@@ -11,13 +11,13 @@
 #include "common/microprofile.h"
 #include "common/thread.h"
 #include "video_core/renderer_vulkan/vk_command_pool.h"
-#include "video_core/renderer_vulkan/vk_device.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_device.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
@@ -37,7 +37,7 @@ void VKScheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf) {
     last = nullptr;
 }
 
-VKScheduler::VKScheduler(const VKDevice& device_, StateTracker& state_tracker_)
+VKScheduler::VKScheduler(const Device& device_, StateTracker& state_tracker_)
     : device{device_}, state_tracker{state_tracker_},
       master_semaphore{std::make_unique<MasterSemaphore>(device)},
       command_pool{std::make_unique<CommandPool>(*master_semaphore, device)} {
@@ -50,18 +50,6 @@ VKScheduler::~VKScheduler() {
     quit = true;
     cv.notify_all();
     worker_thread.join();
-}
-
-u64 VKScheduler::CurrentTick() const noexcept {
-    return master_semaphore->CurrentTick();
-}
-
-bool VKScheduler::IsFree(u64 tick) const noexcept {
-    return master_semaphore->IsFree(tick);
-}
-
-void VKScheduler::Wait(u64 tick) {
-    master_semaphore->Wait(tick);
 }
 
 void VKScheduler::Flush(VkSemaphore semaphore) {
@@ -269,7 +257,7 @@ void VKScheduler::EndRenderPass() {
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
                                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, nullptr, nullptr,
+                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,
                                vk::Span(barriers.data(), num_images));
     });
     state.renderpass = nullptr;

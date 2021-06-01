@@ -6,16 +6,17 @@
 #include <memory>
 #include <utility>
 
+#include <QAbstractButton>
 #include <QCheckBox>
+#include <QDialogButtonBox>
 #include <QHeaderView>
 #include <QMenu>
+#include <QPushButton>
 #include <QStandardItemModel>
 #include <QString>
 #include <QTimer>
 #include <QTreeView>
 
-#include "common/common_paths.h"
-#include "common/file_util.h"
 #include "core/core.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
@@ -44,6 +45,12 @@ ConfigurePerGame::ConfigurePerGame(QWidget* parent, u64 title_id)
     scene = new QGraphicsScene;
     ui->icon_view->setScene(scene);
 
+    if (Core::System::GetInstance().IsPoweredOn()) {
+        QPushButton* apply_button = ui->buttonBox->addButton(QDialogButtonBox::Apply);
+        connect(apply_button, &QAbstractButton::clicked, this,
+                &ConfigurePerGame::HandleApplyButtonClicked);
+    }
+
     LoadConfiguration();
 }
 
@@ -52,12 +59,13 @@ ConfigurePerGame::~ConfigurePerGame() = default;
 void ConfigurePerGame::ApplyConfiguration() {
     ui->addonsTab->ApplyConfiguration();
     ui->generalTab->ApplyConfiguration();
+    ui->cpuTab->ApplyConfiguration();
     ui->systemTab->ApplyConfiguration();
     ui->graphicsTab->ApplyConfiguration();
     ui->graphicsAdvancedTab->ApplyConfiguration();
     ui->audioTab->ApplyConfiguration();
 
-    Settings::Apply(Core::System::GetInstance());
+    Core::System::GetInstance().ApplySettings();
     Settings::LogSettings();
 
     game_config->Save();
@@ -73,6 +81,11 @@ void ConfigurePerGame::changeEvent(QEvent* event) {
 
 void ConfigurePerGame::RetranslateUI() {
     ui->retranslateUi(this);
+}
+
+void ConfigurePerGame::HandleApplyButtonClicked() {
+    UISettings::values.configuration_applied = true;
+    ApplyConfiguration();
 }
 
 void ConfigurePerGame::LoadFromFile(FileSys::VirtualFile file) {

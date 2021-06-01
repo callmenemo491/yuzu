@@ -7,7 +7,7 @@
 #include <memory>
 #include <unordered_map>
 
-#include <dynarmic/A64/a64.h>
+#include <dynarmic/interface/A64/a64.h>
 #include "common/common_types.h"
 #include "common/hash.h"
 #include "core/arm/arm_interface.h"
@@ -26,8 +26,8 @@ class System;
 
 class ARM_Dynarmic_64 final : public ARM_Interface {
 public:
-    ARM_Dynarmic_64(System& system, CPUInterrupts& interrupt_handlers, bool uses_wall_clock,
-                    ExclusiveMonitor& exclusive_monitor, std::size_t core_index);
+    ARM_Dynarmic_64(System& system_, CPUInterrupts& interrupt_handlers_, bool uses_wall_clock_,
+                    ExclusiveMonitor& exclusive_monitor_, std::size_t core_index_);
     ~ARM_Dynarmic_64() override;
 
     void SetPC(u64 pc) override;
@@ -40,12 +40,10 @@ public:
     void SetPSTATE(u32 pstate) override;
     void Run() override;
     void Step() override;
-    void ExceptionalExit() override;
     VAddr GetTlsAddress() const override;
     void SetTlsAddress(VAddr address) override;
     void SetTPIDR_EL0(u64 value) override;
     u64 GetTPIDR_EL0() const override;
-    void ChangeProcessorID(std::size_t new_core_id) override;
 
     void SaveContext(ThreadContext32& ctx) override {}
     void SaveContext(ThreadContext64& ctx) override;
@@ -61,7 +59,7 @@ public:
                           std::size_t new_address_space_size_in_bits) override;
 
 private:
-    std::shared_ptr<Dynarmic::A64::Jit> MakeJit(Common::PageTable& page_table,
+    std::shared_ptr<Dynarmic::A64::Jit> MakeJit(Common::PageTable* page_table,
                                                 std::size_t address_space_bits) const;
 
     using JitCacheKey = std::pair<Common::PageTable*, std::size_t>;
@@ -71,10 +69,17 @@ private:
     friend class DynarmicCallbacks64;
     std::unique_ptr<DynarmicCallbacks64> cb;
     JitCacheType jit_cache;
-    std::shared_ptr<Dynarmic::A64::Jit> jit;
 
     std::size_t core_index;
     DynarmicExclusiveMonitor& exclusive_monitor;
+
+    std::shared_ptr<Dynarmic::A64::Jit> jit;
+
+    // SVC callback
+    u32 svc_swi{};
+    bool svc_called{};
+
+    bool shutdown{};
 };
 
 } // namespace Core

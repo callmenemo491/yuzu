@@ -219,8 +219,8 @@ public:
         return *shader_notify;
     }
 
-    // Waits for the GPU to finish working
-    void WaitIdle() const;
+    // Stops the GPU execution and waits for the GPU to finish working
+    void ShutDown();
 
     /// Allows the CPU/NvFlinger to wait on the GPU before presenting a frame.
     void WaitFence(u32 syncpoint_id, u32 value);
@@ -247,6 +247,8 @@ public:
         return use_nvdec;
     }
 
+    void RendererFrameEndNotify();
+
     enum class FenceOperation : u32 {
         Acquire = 0,
         Increment = 1,
@@ -270,7 +272,7 @@ public:
 
         union {
             struct {
-                INSERT_UNION_PADDING_WORDS(0x4);
+                INSERT_PADDING_WORDS_NOINIT(0x4);
                 struct {
                     u32 address_high;
                     u32 address_low;
@@ -283,18 +285,18 @@ public:
 
                 u32 semaphore_sequence;
                 u32 semaphore_trigger;
-                INSERT_UNION_PADDING_WORDS(0xC);
+                INSERT_PADDING_WORDS_NOINIT(0xC);
 
                 // The pusher and the puller share the reference counter, the pusher only has read
                 // access
                 u32 reference_count;
-                INSERT_UNION_PADDING_WORDS(0x5);
+                INSERT_PADDING_WORDS_NOINIT(0x5);
 
                 u32 semaphore_acquire;
                 u32 semaphore_release;
                 u32 fence_value;
                 FenceAction fence_action;
-                INSERT_UNION_PADDING_WORDS(0xE2);
+                INSERT_PADDING_WORDS_NOINIT(0xE2);
 
                 // Puller state
                 u32 acquire_mode;
@@ -323,6 +325,9 @@ public:
 
     /// Push GPU command buffer entries to be processed
     void PushCommandBuffer(Tegra::ChCommandHeaderList& entries);
+
+    /// Frees the CDMAPusher instance to free up resources
+    void ClearCdmaInstance();
 
     /// Swap buffers (render frame)
     void SwapBuffers(const Tegra::FramebufferConfig* framebuffer);
@@ -366,6 +371,7 @@ protected:
     std::unique_ptr<Tegra::DmaPusher> dma_pusher;
     std::unique_ptr<Tegra::CDmaPusher> cdma_pusher;
     std::unique_ptr<VideoCore::RendererBase> renderer;
+    VideoCore::RasterizerInterface* rasterizer = nullptr;
     const bool use_nvdec;
 
 private:
@@ -383,6 +389,8 @@ private:
     std::unique_ptr<Engines::KeplerMemory> kepler_memory;
     /// Shader build notifier
     std::unique_ptr<VideoCore::ShaderNotify> shader_notify;
+    /// When true, we are about to shut down emulation session, so terminate outstanding tasks
+    std::atomic_bool shutting_down{};
 
     std::array<std::atomic<u32>, Service::Nvidia::MaxSyncPoints> syncpoints{};
 

@@ -4,6 +4,12 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/CMakeModules)
 
+# Set the RPATH for Qt Libraries
+# This must be done before the `yuzu` target is created
+if (YUZU_USE_BUNDLED_QT AND (${CMAKE_SYSTEM_NAME} STREQUAL "Linux"))
+    set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/bin/lib/")
+endif()
+
 add_executable(yuzu
     Info.plist
     about_dialog.cpp
@@ -18,6 +24,7 @@ add_executable(yuzu
     applets/profile_select.h
     applets/software_keyboard.cpp
     applets/software_keyboard.h
+    applets/software_keyboard.ui
     applets/web_browser.cpp
     applets/web_browser.h
     bootmanager.cpp
@@ -71,6 +78,8 @@ add_executable(yuzu
     configuration/configure_input_player.cpp
     configuration/configure_input_player.h
     configuration/configure_input_player.ui
+    configuration/configure_input_player_widget.cpp
+    configuration/configure_input_player_widget.h
     configuration/configure_input_profile_dialog.cpp
     configuration/configure_input_profile_dialog.h
     configuration/configure_input_profile_dialog.ui
@@ -115,6 +124,8 @@ add_executable(yuzu
     configuration/input_profiles.h
     debugger/console.cpp
     debugger/console.h
+    debugger/controller.cpp
+    debugger/controller.h
     debugger/profiler.cpp
     debugger/profiler.h
     debugger/wait_tree.cpp
@@ -139,6 +150,9 @@ add_executable(yuzu
     uisettings.h
     util/limitable_input_dialog.cpp
     util/limitable_input_dialog.h
+    util/overlay_dialog.cpp
+    util/overlay_dialog.h
+    util/overlay_dialog.ui
     util/sequence_dialog/sequence_dialog.cpp
     util/sequence_dialog/sequence_dialog.h
     util/url_request_interceptor.cpp
@@ -147,6 +161,7 @@ add_executable(yuzu
     util/util.h
     compatdb.cpp
     compatdb.h
+    yuzu.qrc
     yuzu.rc
 )
 
@@ -269,11 +284,14 @@ if(UNIX AND NOT APPLE)
     install(TARGETS yuzu RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}/bin")
 endif()
 
-if (MSVC)
+if (YUZU_USE_BUNDLED_QT)
     include(CopyYuzuQt5Deps)
+    copy_yuzu_Qt5_deps(yuzu)
+endif()
+
+if (MSVC)
     include(CopyYuzuSDLDeps)
     include(CopyYuzuFFmpegDeps)
-    copy_yuzu_Qt5_deps(yuzu)
     copy_yuzu_SDL_deps(yuzu)
     copy_yuzu_FFmpeg_deps(yuzu)
 endif()

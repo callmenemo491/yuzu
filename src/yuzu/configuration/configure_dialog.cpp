@@ -2,11 +2,14 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <QAbstractButton>
+#include <QDialogButtonBox>
 #include <QHash>
 #include <QListWidgetItem>
+#include <QPushButton>
 #include <QSignalBlocker>
+#include "common/settings.h"
 #include "core/core.h"
-#include "core/settings.h"
 #include "ui_configure.h"
 #include "yuzu/configuration/config.h"
 #include "yuzu/configuration/configure_dialog.h"
@@ -30,6 +33,12 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry,
     connect(ui->uiTab, &ConfigureUi::LanguageChanged, this, &ConfigureDialog::OnLanguageChanged);
     connect(ui->selectorList, &QListWidget::itemSelectionChanged, this,
             &ConfigureDialog::UpdateVisibleTabs);
+
+    if (Core::System::GetInstance().IsPoweredOn()) {
+        QPushButton* apply_button = ui->buttonBox->addButton(QDialogButtonBox::Apply);
+        connect(apply_button, &QAbstractButton::clicked, this,
+                &ConfigureDialog::HandleApplyButtonClicked);
+    }
 
     adjustSize();
     ui->selectorList->setCurrentRow(0);
@@ -55,7 +64,7 @@ void ConfigureDialog::ApplyConfiguration() {
     ui->debugTab->ApplyConfiguration();
     ui->webTab->ApplyConfiguration();
     ui->serviceTab->ApplyConfiguration();
-    Settings::Apply(Core::System::GetInstance());
+    Core::System::GetInstance().ApplySettings();
     Settings::LogSettings();
 }
 
@@ -78,6 +87,11 @@ void ConfigureDialog::RetranslateUI() {
 
     UpdateVisibleTabs();
     ui->tabWidget->setCurrentIndex(old_index);
+}
+
+void ConfigureDialog::HandleApplyButtonClicked() {
+    UISettings::values.configuration_applied = true;
+    ApplyConfiguration();
 }
 
 Q_DECLARE_METATYPE(QList<QWidget*>);
@@ -117,31 +131,13 @@ void ConfigureDialog::UpdateVisibleTabs() {
         return;
     }
 
-    const std::map<QWidget*, QString> widgets = {
-        {ui->generalTab, tr("General")},
-        {ui->systemTab, tr("System")},
-        {ui->profileManagerTab, tr("Profiles")},
-        {ui->inputTab, tr("Controls")},
-        {ui->hotkeysTab, tr("Hotkeys")},
-        {ui->cpuTab, tr("CPU")},
-        {ui->cpuDebugTab, tr("Debug")},
-        {ui->graphicsTab, tr("Graphics")},
-        {ui->graphicsAdvancedTab, tr("Advanced")},
-        {ui->audioTab, tr("Audio")},
-        {ui->debugTab, tr("Debug")},
-        {ui->webTab, tr("Web")},
-        {ui->uiTab, tr("UI")},
-        {ui->filesystemTab, tr("Filesystem")},
-        {ui->serviceTab, tr("Services")},
-    };
-
     [[maybe_unused]] const QSignalBlocker blocker(ui->tabWidget);
 
     ui->tabWidget->clear();
 
-    const QList<QWidget*> tabs = qvariant_cast<QList<QWidget*>>(items[0]->data(Qt::UserRole));
+    const auto tabs = qvariant_cast<QList<QWidget*>>(items[0]->data(Qt::UserRole));
 
-    for (const auto tab : tabs) {
+    for (auto* const tab : tabs) {
         ui->tabWidget->addTab(tab, tab->accessibleName());
     }
 }

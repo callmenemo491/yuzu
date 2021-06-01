@@ -2,19 +2,16 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-// This file references various implementation details from Atmosphere, an open-source firmware for
-// the Nintendo Switch. Copyright 2018-2020 Atmosphere-NX.
-
 #pragma once
 
 #include <atomic>
 
 #include "common/common_types.h"
-#include "common/spin_lock.h"
 #include "core/hle/kernel/global_scheduler_context.h"
 #include "core/hle/kernel/k_priority_queue.h"
 #include "core/hle/kernel/k_scheduler_lock.h"
 #include "core/hle/kernel/k_scoped_lock.h"
+#include "core/hle/kernel/k_spin_lock.h"
 
 namespace Common {
 class Fiber;
@@ -27,31 +24,35 @@ class System;
 namespace Kernel {
 
 class KernelCore;
-class Process;
+class KProcess;
 class SchedulerLock;
-class Thread;
+class KThread;
 
 class KScheduler final {
 public:
-    explicit KScheduler(Core::System& system, std::size_t core_id);
+    explicit KScheduler(Core::System& system_, s32 core_id_);
     ~KScheduler();
 
     /// Reschedules to the next available thread (call after current thread is suspended)
     void RescheduleCurrentCore();
 
     /// Reschedules cores pending reschedule, to be called on EnableScheduling.
-    static void RescheduleCores(KernelCore& kernel, u64 cores_pending_reschedule,
-                                Core::EmuThreadHandle global_thread);
+    static void RescheduleCores(KernelCore& kernel, u64 cores_pending_reschedule);
 
     /// The next two are for SingleCore Only.
     /// Unload current thread before preempting core.
-    void Unload(Thread* thread);
+    void Unload(KThread* thread);
 
     /// Reload current thread after core preemption.
-    void Reload(Thread* thread);
+    void Reload(KThread* thread);
 
     /// Gets the current running thread
-    [[nodiscard]] Thread* GetCurrentThread() const;
+    [[nodiscard]] KThread* GetCurrentThread() const;
+
+    /// Returns true if the scheduler is idle
+    [[nodiscard]] bool IsIdle() const {
+        return GetCurrentThread() == idle_thread;
+    }
 
     /// Gets the timestamp for the last context switch in ticks.
     [[nodiscard]] u64 GetLastContextSwitchTicks() const;
@@ -72,14 +73,14 @@ public:
         return switch_fiber;
     }
 
-    [[nodiscard]] u64 UpdateHighestPriorityThread(Thread* highest_thread);
+    [[nodiscard]] u64 UpdateHighestPriorityThread(KThread* highest_thread);
 
     /**
      * Takes a thread and moves it to the back of the it's priority list.
      *
      * @note This operation can be redundant and no scheduling is changed if marked as so.
      */
-    void YieldWithoutCoreMigration();
+    static void YieldWithoutCoreMigration(KernelCore& kernel);
 
     /**
      * Takes a thread and moves it to the back of the it's priority list.
@@ -88,7 +89,7 @@ public:
      *
      * @note This operation can be redundant and no scheduling is changed if marked as so.
      */
-    void YieldWithCoreMigration();
+    static void YieldWithCoreMigration(KernelCore& kernel);
 
     /**
      * Takes a thread and moves it out of the scheduling queue.
@@ -97,17 +98,18 @@ public:
      *
      * @note This operation can be redundant and no scheduling is changed if marked as so.
      */
-    void YieldToAnyThread();
+    static void YieldToAnyThread(KernelCore& kernel);
+
+    static void ClearPreviousThread(KernelCore& kernel, KThread* thread);
 
     /// Notify the scheduler a thread's status has changed.
-    static void OnThreadStateChanged(KernelCore& kernel, Thread* thread, u32 old_state);
+    static void OnThreadStateChanged(KernelCore& kernel, KThread* thread, ThreadState old_state);
 
     /// Notify the scheduler a thread's priority has changed.
-    static void OnThreadPriorityChanged(KernelCore& kernel, Thread* thread, Thread* current_thread,
-                                        u32 old_priority);
+    static void OnThreadPriorityChanged(KernelCore& kernel, KThread* thread, s32 old_priority);
 
     /// Notify the scheduler a thread's core and/or affinity mask has changed.
-    static void OnThreadAffinityMaskChanged(KernelCore& kernel, Thread* thread,
+    static void OnThreadAffinityMaskChanged(KernelCore& kernel, KThread* thread,
                                             const KAffinityMask& old_affinity, s32 old_core);
 
     static bool CanSchedule(KernelCore& kernel);
@@ -115,8 +117,7 @@ public:
     static void SetSchedulerUpdateNeeded(KernelCore& kernel);
     static void ClearSchedulerUpdateNeeded(KernelCore& kernel);
     static void DisableScheduling(KernelCore& kernel);
-    static void EnableScheduling(KernelCore& kernel, u64 cores_needing_scheduling,
-                                 Core::EmuThreadHandle global_thread);
+    static void EnableScheduling(KernelCore& kernel, u64 cores_needing_scheduling);
     [[nodiscard]] static u64 UpdateHighestPriorityThreads(KernelCore& kernel);
 
 private:
@@ -140,7 +141,7 @@ private:
 
     [[nodiscard]] static KSchedulerPriorityQueue& GetPriorityQueue(KernelCore& kernel);
 
-    void RotateScheduledQueue(s32 core_id, s32 priority);
+    void RotateScheduledQueue(s32 cpu_core_id, s32 priority);
 
     void Schedule() {
         ASSERT(GetCurrentThread()->GetDisableDispatchCount() == 1);
@@ -164,22 +165,24 @@ private:
      * most recent tick count retrieved. No special arithmetic is
      * applied to it.
      */
-    void UpdateLastContextSwitchTime(Thread* thread, Process* process);
+    void UpdateLastContextSwitchTime(KThread* thread, KProcess* process);
 
     static void OnSwitch(void* this_scheduler);
     void SwitchToCurrent();
 
-    Thread* current_thread{};
-    Thread* idle_thread{};
+    KThread* prev_thread{};
+    std::atomic<KThread*> current_thread{};
+
+    KThread* idle_thread{};
 
     std::shared_ptr<Common::Fiber> switch_fiber{};
 
     struct SchedulingState {
-        std::atomic<bool> needs_scheduling;
+        std::atomic<bool> needs_scheduling{};
         bool interrupt_task_thread_runnable{};
         bool should_count_idle{};
         u64 idle_count{};
-        Thread* highest_priority_thread{};
+        KThread* highest_priority_thread{};
         void* idle_thread_stack{};
     };
 
@@ -187,14 +190,14 @@ private:
 
     Core::System& system;
     u64 last_context_switch_time{};
-    const std::size_t core_id;
+    const s32 core_id;
 
-    Common::SpinLock guard{};
+    KSpinLock guard{};
 };
 
-class KScopedSchedulerLock : KScopedLock<GlobalSchedulerContext::LockType> {
+class [[nodiscard]] KScopedSchedulerLock : KScopedLock<GlobalSchedulerContext::LockType> {
 public:
-    explicit KScopedSchedulerLock(KernelCore& kernel);
+    explicit KScopedSchedulerLock(KernelCore & kernel);
     ~KScopedSchedulerLock();
 };
 

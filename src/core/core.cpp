@@ -6,9 +6,10 @@
 #include <memory>
 #include <utility>
 
-#include "common/file_util.h"
+#include "common/fs/fs.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 #include "core/arm/exclusive_monitor.h"
 #include "core/core.h"
@@ -26,17 +27,17 @@
 #include "core/file_sys/vfs_concat.h"
 #include "core/file_sys/vfs_real.h"
 #include "core/hardware_interrupt_manager.h"
-#include "core/hle/kernel/client_port.h"
+#include "core/hle/kernel/k_client_port.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scheduler.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_core.h"
-#include "core/hle/kernel/process.h"
-#include "core/hle/kernel/thread.h"
 #include "core/hle/service/am/applets/applets.h"
 #include "core/hle/service/apm/controller.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/glue/manager.h"
-#include "core/hle/service/lm/manager.h"
+#include "core/hle/service/hid/hid.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/time/time_manager.h"
@@ -46,7 +47,6 @@
 #include "core/network/network.h"
 #include "core/perf_stats.h"
 #include "core/reporter.h"
-#include "core/settings.h"
 #include "core/telemetry_session.h"
 #include "core/tools/freezer.h"
 #include "video_core/renderer_base.h"
@@ -121,7 +121,7 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
                                                                   dir->GetName());
     }
 
-    if (Common::FS::IsDirectory(path)) {
+    if (Common::FS::IsDir(path)) {
         return vfs->OpenFile(path + "/main", FileSys::Mode::Read);
     }
 
@@ -166,14 +166,14 @@ struct System::Impl {
         cpu_manager.SetAsyncGpu(is_async_gpu);
         core_timing.SetMulticore(is_multicore);
 
-        core_timing.Initialize([&system]() { system.RegisterHostThread(); });
         kernel.Initialize();
         cpu_manager.Initialize();
+        core_timing.Initialize([&system]() { system.RegisterHostThread(); });
 
         const auto current_time = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch());
         Settings::values.custom_rtc_differential =
-            Settings::values.custom_rtc.GetValue().value_or(current_time) - current_time;
+            Settings::values.custom_rtc.value_or(current_time) - current_time;
 
         // Create a default fs if one doesn't already exist.
         if (virtual_filesystem == nullptr)
@@ -233,8 +233,11 @@ struct System::Impl {
         }
 
         telemetry_session->AddInitialInfo(*app_loader, fs_controller, *content_provider);
-        auto main_process =
-            Kernel::Process::Create(system, "main", Kernel::Process::ProcessType::Userland);
+        auto main_process = Kernel::KProcess::Create(system.Kernel());
+        ASSERT(Kernel::KProcess::Initialize(main_process, system, "main",
+                                            Kernel::KProcess::ProcessType::Userland)
+                   .IsSuccess());
+        main_process->Open();
         const auto [load_result, load_parameters] = app_loader->Load(*main_process, system);
         if (load_result != Loader::ResultStatus::Success) {
             LOG_CRITICAL(Core, "Failed to load ROM (Error {})!", load_result);
@@ -244,7 +247,7 @@ struct System::Impl {
                                              static_cast<u32>(load_result));
         }
         AddGlueRegistrationForProcess(*app_loader, *main_process);
-        kernel.MakeCurrentProcess(main_process.get());
+        kernel.MakeCurrentProcess(main_process);
         kernel.InitializeCores();
 
         // Initialize cheat engine
@@ -286,41 +289,33 @@ struct System::Impl {
 
             telemetry_session->AddField(performance, "Shutdown_EmulationSpeed",
                                         perf_results.emulation_speed * 100.0);
-            telemetry_session->AddField(performance, "Shutdown_Framerate", perf_results.game_fps);
+            telemetry_session->AddField(performance, "Shutdown_Framerate",
+                                        perf_results.average_game_fps);
             telemetry_session->AddField(performance, "Shutdown_Frametime",
                                         perf_results.frametime * 1000.0);
             telemetry_session->AddField(performance, "Mean_Frametime_MS",
                                         perf_stats->GetMeanFrametime());
         }
 
-        lm_manager.Flush();
-
         is_powered_on = false;
         exit_lock = false;
 
         if (gpu_core) {
-            gpu_core->WaitIdle();
+            gpu_core->ShutDown();
         }
 
-        // Shutdown emulation session
         services.reset();
         service_manager.reset();
         cheat_engine.reset();
         telemetry_session.reset();
-
-        // Close all CPU/threading state
         cpu_manager.Shutdown();
-
-        // Shutdown kernel and core timing
+        time_manager.Shutdown();
         core_timing.Shutdown();
-        kernel.Shutdown();
-
-        // Close app loader
         app_loader.reset();
         gpu_core.reset();
         perf_stats.reset();
-
-        // Clear all applets
+        kernel.Shutdown();
+        memory.Reset();
         applet_manager.ClearAll();
 
         LOG_DEBUG(Core, "Shutdown OK");
@@ -332,7 +327,7 @@ struct System::Impl {
         return app_loader->ReadTitle(out);
     }
 
-    void AddGlueRegistrationForProcess(Loader::AppLoader& loader, Kernel::Process& process) {
+    void AddGlueRegistrationForProcess(Loader::AppLoader& loader, Kernel::KProcess& process) {
         std::vector<u8> nacp_data;
         FileSys::NACP nacp;
         if (loader.ReadControlData(nacp) == Loader::ResultStatus::Success) {
@@ -398,7 +393,6 @@ struct System::Impl {
 
     /// Service State
     Service::Glue::ARPManager arp_manager;
-    Service::LM::Manager lm_manager{reporter};
     Service::Time::TimeManager time_manager;
 
     /// Service manager
@@ -524,7 +518,7 @@ const Kernel::GlobalSchedulerContext& System::GlobalSchedulerContext() const {
     return impl->kernel.GlobalSchedulerContext();
 }
 
-Kernel::Process* System::CurrentProcess() {
+Kernel::KProcess* System::CurrentProcess() {
     return impl->kernel.CurrentProcess();
 }
 
@@ -536,7 +530,7 @@ const Core::DeviceMemory& System::DeviceMemory() const {
     return *impl->device_memory;
 }
 
-const Kernel::Process* System::CurrentProcess() const {
+const Kernel::KProcess* System::CurrentProcess() const {
     return impl->kernel.CurrentProcess();
 }
 
@@ -720,14 +714,6 @@ const Service::APM::Controller& System::GetAPMController() const {
     return impl->apm_controller;
 }
 
-Service::LM::Manager& System::GetLogManager() {
-    return impl->lm_manager;
-}
-
-const Service::LM::Manager& System::GetLogManager() const {
-    return impl->lm_manager;
-}
-
 Service::Time::TimeManager& System::GetTimeManager() {
     return impl->time_manager;
 }
@@ -792,6 +778,14 @@ void System::ExecuteProgram(std::size_t program_index) {
     } else {
         LOG_CRITICAL(Core, "execute_program_callback must be initialized by the frontend");
     }
+}
+
+void System::ApplySettings() {
+    if (IsPoweredOn()) {
+        Renderer().RefreshBaseSettings();
+    }
+
+    Service::HID::ReloadInputDevices();
 }
 
 } // namespace Core

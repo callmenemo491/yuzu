@@ -7,17 +7,19 @@
 #include <cinttypes>
 #include <cstring>
 #include "audio_core/audio_renderer.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_transfer_memory.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/process.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/transfer_memory.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/am/applet_ae.h"
@@ -40,7 +42,7 @@
 #include "core/hle/service/set/set.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/vi/vi.h"
-#include "core/settings.h"
+#include "core/memory.h"
 
 namespace Service::AM {
 
@@ -230,6 +232,7 @@ IDebugFunctions::IDebugFunctions(Core::System& system_)
         {10, nullptr, "PerformSystemButtonPressing"},
         {20, nullptr, "InvalidateTransitionLayer"},
         {30, nullptr, "RequestLaunchApplicationWithUserAndArgumentForDebug"},
+        {31, nullptr, "RequestLaunchApplicationByApplicationLaunchInfoForDebug"},
         {40, nullptr, "GetAppletResourceUsageInfo"},
         {100, nullptr, "SetCpuBoostModeForApplet"},
         {101, nullptr, "CancelCpuBoostModeForApplet"},
@@ -241,6 +244,7 @@ IDebugFunctions::IDebugFunctions(Core::System& system_)
         {130, nullptr, "FriendInvitationSetApplicationParameter"},
         {131, nullptr, "FriendInvitationClearApplicationParameter"},
         {132, nullptr, "FriendInvitationPushApplicationParameter"},
+        {900, nullptr, "GetGrcProcessLaunchedSystemEvent"},
     };
     // clang-format on
 
@@ -250,7 +254,8 @@ IDebugFunctions::IDebugFunctions(Core::System& system_)
 IDebugFunctions::~IDebugFunctions() = default;
 
 ISelfController::ISelfController(Core::System& system_, NVFlinger::NVFlinger& nvflinger_)
-    : ServiceFramework{system_, "ISelfController"}, nvflinger{nvflinger_} {
+    : ServiceFramework{system_, "ISelfController"}, nvflinger{nvflinger_},
+      launchable_event{system.Kernel()}, accumulated_suspended_tick_changed_event{system.Kernel()} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, &ISelfController::Exit, "Exit"},
@@ -294,26 +299,29 @@ ISelfController::ISelfController(Core::System& system_, NVFlinger::NVFlinger& nv
         {80, nullptr, "SetWirelessPriorityMode"},
         {90, &ISelfController::GetAccumulatedSuspendedTickValue, "GetAccumulatedSuspendedTickValue"},
         {91, &ISelfController::GetAccumulatedSuspendedTickChangedEvent, "GetAccumulatedSuspendedTickChangedEvent"},
-        {100, nullptr, "SetAlbumImageTakenNotificationEnabled"},
+        {100, &ISelfController::SetAlbumImageTakenNotificationEnabled, "SetAlbumImageTakenNotificationEnabled"},
         {110, nullptr, "SetApplicationAlbumUserData"},
+        {120, nullptr, "SaveCurrentScreenshot"},
         {1000, nullptr, "GetDebugStorageChannel"},
     };
     // clang-format on
 
     RegisterHandlers(functions);
 
-    auto& kernel = system.Kernel();
-    launchable_event =
-        Kernel::WritableEvent::CreateEventPair(kernel, "ISelfController:LaunchableEvent");
+    Kernel::KAutoObject::Create(std::addressof(launchable_event));
+
+    launchable_event.Initialize("ISelfController:LaunchableEvent");
 
     // This event is created by AM on the first time GetAccumulatedSuspendedTickChangedEvent() is
     // called. Yuzu can just create it unconditionally, since it doesn't need to support multiple
     // ISelfControllers. The event is signaled on creation, and on transition from suspended -> not
     // suspended if the event has previously been created by a call to
     // GetAccumulatedSuspendedTickChangedEvent.
-    accumulated_suspended_tick_changed_event = Kernel::WritableEvent::CreateEventPair(
-        kernel, "ISelfController:AccumulatedSuspendedTickChangedEvent");
-    accumulated_suspended_tick_changed_event.writable->Signal();
+
+    Kernel::KAutoObject::Create(std::addressof(accumulated_suspended_tick_changed_event));
+    accumulated_suspended_tick_changed_event.Initialize(
+        "ISelfController:AccumulatedSuspendedTickChangedEvent");
+    accumulated_suspended_tick_changed_event.GetWritableEvent().Signal();
 }
 
 ISelfController::~ISelfController() = default;
@@ -372,11 +380,11 @@ void ISelfController::LeaveFatalSection(Kernel::HLERequestContext& ctx) {
 void ISelfController::GetLibraryAppletLaunchableEvent(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
 
-    launchable_event.writable->Signal();
+    launchable_event.GetWritableEvent().Signal();
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(launchable_event.readable);
+    rb.PushCopyObjects(launchable_event.GetReadableEvent());
 }
 
 void ISelfController::SetScreenShotPermission(Kernel::HLERequestContext& ctx) {
@@ -555,41 +563,58 @@ void ISelfController::GetAccumulatedSuspendedTickChangedEvent(Kernel::HLERequest
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(accumulated_suspended_tick_changed_event.readable);
+    rb.PushCopyObjects(accumulated_suspended_tick_changed_event.GetReadableEvent());
 }
 
-AppletMessageQueue::AppletMessageQueue(Kernel::KernelCore& kernel) {
-    on_new_message =
-        Kernel::WritableEvent::CreateEventPair(kernel, "AMMessageQueue:OnMessageRecieved");
-    on_operation_mode_changed =
-        Kernel::WritableEvent::CreateEventPair(kernel, "AMMessageQueue:OperationModeChanged");
+void ISelfController::SetAlbumImageTakenNotificationEnabled(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+
+    // This service call sets an internal flag whether a notification is shown when an image is
+    // captured. Currently we do not support capturing images via the capture button, so this can be
+    // stubbed for now.
+    const bool album_image_taken_notification_enabled = rp.Pop<bool>();
+
+    LOG_WARNING(Service_AM, "(STUBBED) called. album_image_taken_notification_enabled={}",
+                album_image_taken_notification_enabled);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+AppletMessageQueue::AppletMessageQueue(Kernel::KernelCore& kernel)
+    : on_new_message{kernel}, on_operation_mode_changed{kernel} {
+
+    Kernel::KAutoObject::Create(std::addressof(on_new_message));
+    Kernel::KAutoObject::Create(std::addressof(on_operation_mode_changed));
+
+    on_new_message.Initialize("AMMessageQueue:OnMessageReceived");
+    on_operation_mode_changed.Initialize("AMMessageQueue:OperationModeChanged");
 }
 
 AppletMessageQueue::~AppletMessageQueue() = default;
 
-const std::shared_ptr<Kernel::ReadableEvent>& AppletMessageQueue::GetMesssageRecieveEvent() const {
-    return on_new_message.readable;
+Kernel::KReadableEvent& AppletMessageQueue::GetMessageReceiveEvent() {
+    return on_new_message.GetReadableEvent();
 }
 
-const std::shared_ptr<Kernel::ReadableEvent>& AppletMessageQueue::GetOperationModeChangedEvent()
-    const {
-    return on_operation_mode_changed.readable;
+Kernel::KReadableEvent& AppletMessageQueue::GetOperationModeChangedEvent() {
+    return on_operation_mode_changed.GetReadableEvent();
 }
 
 void AppletMessageQueue::PushMessage(AppletMessage msg) {
     messages.push(msg);
-    on_new_message.writable->Signal();
+    on_new_message.GetWritableEvent().Signal();
 }
 
 AppletMessageQueue::AppletMessage AppletMessageQueue::PopMessage() {
     if (messages.empty()) {
-        on_new_message.writable->Clear();
+        on_new_message.GetWritableEvent().Clear();
         return AppletMessage::NoMessage;
     }
     auto msg = messages.front();
     messages.pop();
     if (messages.empty()) {
-        on_new_message.writable->Clear();
+        on_new_message.GetWritableEvent().Clear();
     }
     return msg;
 }
@@ -598,14 +623,18 @@ std::size_t AppletMessageQueue::GetMessageCount() const {
     return messages.size();
 }
 
+void AppletMessageQueue::RequestExit() {
+    PushMessage(AppletMessage::ExitRequested);
+}
+
+void AppletMessageQueue::FocusStateChanged() {
+    PushMessage(AppletMessage::FocusStateChanged);
+}
+
 void AppletMessageQueue::OperationModeChanged() {
     PushMessage(AppletMessage::OperationModeChanged);
     PushMessage(AppletMessage::PerformanceModeChanged);
-    on_operation_mode_changed.writable->Signal();
-}
-
-void AppletMessageQueue::RequestExit() {
-    PushMessage(AppletMessage::ExitRequested);
+    on_operation_mode_changed.GetWritableEvent().Signal();
 }
 
 ICommonStateGetter::ICommonStateGetter(Core::System& system_,
@@ -627,6 +656,7 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_,
         {11, nullptr, "ReleaseSleepLock"},
         {12, nullptr, "ReleaseSleepLockTransiently"},
         {13, nullptr, "GetAcquiredSleepLockEvent"},
+        {14, nullptr, "GetWakeupCount"},
         {20, nullptr, "PushToGeneralChannel"},
         {30, nullptr, "GetHomeButtonReaderLockAccessor"},
         {31, nullptr, "GetReaderLockAccessorEx"},
@@ -635,9 +665,10 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_,
         {50, &ICommonStateGetter::IsVrModeEnabled, "IsVrModeEnabled"},
         {51, &ICommonStateGetter::SetVrModeEnabled, "SetVrModeEnabled"},
         {52, &ICommonStateGetter::SetLcdBacklighOffEnabled, "SetLcdBacklighOffEnabled"},
-        {53, nullptr, "BeginVrModeEx"},
+        {53, &ICommonStateGetter::BeginVrModeEx, "BeginVrModeEx"},
         {54, &ICommonStateGetter::EndVrModeEx, "EndVrModeEx"},
         {55, nullptr, "IsInControllerFirmwareUpdateSection"},
+        {59, nullptr, "SetVrPositionForDebug"},
         {60, &ICommonStateGetter::GetDefaultDisplayResolution, "GetDefaultDisplayResolution"},
         {61, &ICommonStateGetter::GetDefaultDisplayResolutionChangeEvent, "GetDefaultDisplayResolutionChangeEvent"},
         {62, nullptr, "GetHdcpAuthenticationState"},
@@ -646,14 +677,21 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_,
         {65, nullptr, "GetApplicationIdByContentActionName"},
         {66, &ICommonStateGetter::SetCpuBoostMode, "SetCpuBoostMode"},
         {67, nullptr, "CancelCpuBoostMode"},
+        {68, nullptr, "GetBuiltInDisplayType"},
         {80, nullptr, "PerformSystemButtonPressingIfInFocus"},
         {90, nullptr, "SetPerformanceConfigurationChangedNotification"},
         {91, nullptr, "GetCurrentPerformanceConfiguration"},
         {100, nullptr, "SetHandlingHomeButtonShortPressedEnabled"},
+        {110, nullptr, "OpenMyGpuErrorHandler"},
         {200, nullptr, "GetOperationModeSystemInfo"},
         {300, nullptr, "GetSettingsPlatformRegion"},
         {400, nullptr, "ActivateMigrationService"},
         {401, nullptr, "DeactivateMigrationService"},
+        {500, nullptr, "DisableSleepTillShutdown"},
+        {501, nullptr, "SuppressDisablingSleepTemporarily"},
+        {502, nullptr, "IsSleepEnabled"},
+        {503, nullptr, "IsDisablingSleepSuppressed"},
+        {900, &ICommonStateGetter::SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled, "SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled"},
     };
     // clang-format on
 
@@ -675,7 +713,7 @@ void ICommonStateGetter::GetEventHandle(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(msg_queue->GetMesssageRecieveEvent());
+    rb.PushCopyObjects(msg_queue->GetMessageReceiveEvent());
 }
 
 void ICommonStateGetter::ReceiveMessage(Kernel::HLERequestContext& ctx) {
@@ -732,6 +770,13 @@ void ICommonStateGetter::SetLcdBacklighOffEnabled(Kernel::HLERequestContext& ctx
     rb.Push(RESULT_SUCCESS);
 }
 
+void ICommonStateGetter::BeginVrModeEx(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
 void ICommonStateGetter::EndVrModeEx(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
 
@@ -776,11 +821,19 @@ void ICommonStateGetter::SetCpuBoostMode(Kernel::HLERequestContext& ctx) {
     apm_sys->SetCpuBoostMode(ctx);
 }
 
+void ICommonStateGetter::SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled(
+    Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
 IStorageImpl::~IStorageImpl() = default;
 
 class StorageDataImpl final : public IStorageImpl {
 public:
-    explicit StorageDataImpl(std::vector<u8>&& buffer) : buffer{std::move(buffer)} {}
+    explicit StorageDataImpl(std::vector<u8>&& buffer_) : buffer{std::move(buffer_)} {}
 
     std::vector<u8>& GetData() override {
         return buffer;
@@ -856,7 +909,7 @@ public:
             {25, nullptr, "Terminate"},
             {30, &ILibraryAppletAccessor::GetResult, "GetResult"},
             {50, nullptr, "SetOutOfFocusApplicationSuspendingEnabled"},
-            {60, nullptr, "PresetLibraryAppletGpuTimeSliceZero"},
+            {60, &ILibraryAppletAccessor::PresetLibraryAppletGpuTimeSliceZero, "PresetLibraryAppletGpuTimeSliceZero"},
             {100, &ILibraryAppletAccessor::PushInData, "PushInData"},
             {101, &ILibraryAppletAccessor::PopOutData, "PopOutData"},
             {102, nullptr, "PushExtraStorage"},
@@ -878,11 +931,9 @@ private:
     void GetAppletStateChangedEvent(Kernel::HLERequestContext& ctx) {
         LOG_DEBUG(Service_AM, "called");
 
-        const auto event = applet->GetBroker().GetStateChangedEvent();
-
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(event);
+        rb.PushCopyObjects(applet->GetBroker().GetStateChangedEvent());
     }
 
     void IsCompleted(Kernel::HLERequestContext& ctx) {
@@ -898,6 +949,13 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(applet->GetStatus());
+    }
+
+    void PresetLibraryAppletGpuTimeSliceZero(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_AM, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
     }
 
     void Start(Kernel::HLERequestContext& ctx) {
@@ -927,7 +985,7 @@ private:
 
         auto storage = applet->GetBroker().PopNormalDataToGame();
         if (storage == nullptr) {
-            LOG_ERROR(Service_AM,
+            LOG_DEBUG(Service_AM,
                       "storage is a nullptr. There is no data in the current normal channel");
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(ERR_NO_DATA_IN_CHANNEL);
@@ -958,7 +1016,7 @@ private:
 
         auto storage = applet->GetBroker().PopInteractiveDataToGame();
         if (storage == nullptr) {
-            LOG_ERROR(Service_AM,
+            LOG_DEBUG(Service_AM,
                       "storage is a nullptr. There is no data in the current interactive channel");
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(ERR_NO_DATA_IN_CHANNEL);
@@ -1030,20 +1088,21 @@ void IStorageAccessor::Write(Kernel::HLERequestContext& ctx) {
 
     const u64 offset{rp.Pop<u64>()};
     const std::vector<u8> data{ctx.ReadBuffer()};
+    const std::size_t size{std::min(data.size(), backing.GetSize() - offset)};
 
-    LOG_DEBUG(Service_AM, "called, offset={}, size={}", offset, data.size());
+    LOG_DEBUG(Service_AM, "called, offset={}, size={}", offset, size);
 
-    if (data.size() > backing.GetSize() - offset) {
+    if (offset > backing.GetSize()) {
         LOG_ERROR(Service_AM,
                   "offset is out of bounds, backing_buffer_sz={}, data_size={}, offset={}",
-                  backing.GetSize(), data.size(), offset);
+                  backing.GetSize(), size, offset);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ERR_SIZE_OUT_OF_BOUNDS);
         return;
     }
 
-    std::memcpy(backing.GetData().data() + offset, data.data(), data.size());
+    std::memcpy(backing.GetData().data() + offset, data.data(), size);
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(RESULT_SUCCESS);
@@ -1053,11 +1112,11 @@ void IStorageAccessor::Read(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
 
     const u64 offset{rp.Pop<u64>()};
-    const std::size_t size{ctx.GetWriteBufferSize()};
+    const std::size_t size{std::min(ctx.GetWriteBufferSize(), backing.GetSize() - offset)};
 
     LOG_DEBUG(Service_AM, "called, offset={}, size={}", offset, size);
 
-    if (size > backing.GetSize() - offset) {
+    if (offset > backing.GetSize()) {
         LOG_ERROR(Service_AM, "offset is out of bounds, backing_buffer_sz={}, size={}, offset={}",
                   backing.GetSize(), size, offset);
 
@@ -1080,7 +1139,7 @@ ILibraryAppletCreator::ILibraryAppletCreator(Core::System& system_)
         {2, nullptr, "AreAnyLibraryAppletsLeft"},
         {10, &ILibraryAppletCreator::CreateStorage, "CreateStorage"},
         {11, &ILibraryAppletCreator::CreateTransferMemoryStorage, "CreateTransferMemoryStorage"},
-        {12, nullptr, "CreateHandleStorage"},
+        {12, &ILibraryAppletCreator::CreateHandleStorage, "CreateHandleStorage"},
     };
     RegisterHandlers(functions);
 }
@@ -1089,14 +1148,15 @@ ILibraryAppletCreator::~ILibraryAppletCreator() = default;
 
 void ILibraryAppletCreator::CreateLibraryApplet(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
+
     const auto applet_id = rp.PopRaw<Applets::AppletId>();
-    const auto applet_mode = rp.PopRaw<u32>();
+    const auto applet_mode = rp.PopRaw<Applets::LibraryAppletMode>();
 
     LOG_DEBUG(Service_AM, "called with applet_id={:08X}, applet_mode={:08X}", applet_id,
               applet_mode);
 
     const auto& applet_manager{system.GetAppletManager()};
-    const auto applet = applet_manager.GetApplet(applet_id);
+    const auto applet = applet_manager.GetApplet(applet_id, applet_mode);
 
     if (applet == nullptr) {
         LOG_ERROR(Service_AM, "Applet doesn't exist! applet_id={}", applet_id);
@@ -1114,8 +1174,17 @@ void ILibraryAppletCreator::CreateLibraryApplet(Kernel::HLERequestContext& ctx) 
 
 void ILibraryAppletCreator::CreateStorage(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
-    const u64 size{rp.Pop<u64>()};
+
+    const s64 size{rp.Pop<s64>()};
+
     LOG_DEBUG(Service_AM, "called, size={}", size);
+
+    if (size <= 0) {
+        LOG_ERROR(Service_AM, "size is less than or equal to 0");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_UNKNOWN);
+        return;
+    }
 
     std::vector<u8> buffer(size);
 
@@ -1125,24 +1194,71 @@ void ILibraryAppletCreator::CreateStorage(Kernel::HLERequestContext& ctx) {
 }
 
 void ILibraryAppletCreator::CreateTransferMemoryStorage(Kernel::HLERequestContext& ctx) {
-    LOG_DEBUG(Service_AM, "called");
-
     IPC::RequestParser rp{ctx};
 
-    rp.SetCurrentOffset(3);
-    const auto handle{rp.Pop<Kernel::Handle>()};
+    struct Parameters {
+        u8 permissions;
+        s64 size;
+    };
 
-    auto transfer_mem =
-        system.CurrentProcess()->GetHandleTable().Get<Kernel::TransferMemory>(handle);
+    const auto parameters{rp.PopRaw<Parameters>()};
+    const auto handle{ctx.GetCopyHandle(0)};
 
-    if (transfer_mem == nullptr) {
-        LOG_ERROR(Service_AM, "shared_mem is a nullpr for handle={:08X}", handle);
+    LOG_DEBUG(Service_AM, "called, permissions={}, size={}, handle={:08X}", parameters.permissions,
+              parameters.size, handle);
+
+    if (parameters.size <= 0) {
+        LOG_ERROR(Service_AM, "size is less than or equal to 0");
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_UNKNOWN);
         return;
     }
 
-    const u8* const mem_begin = transfer_mem->GetPointer();
+    auto transfer_mem =
+        system.CurrentProcess()->GetHandleTable().GetObject<Kernel::KTransferMemory>(handle);
+
+    if (transfer_mem.IsNull()) {
+        LOG_ERROR(Service_AM, "transfer_mem is a nullptr for handle={:08X}", handle);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_UNKNOWN);
+        return;
+    }
+
+    const u8* const mem_begin = system.Memory().GetPointer(transfer_mem->GetSourceAddress());
+    const u8* const mem_end = mem_begin + transfer_mem->GetSize();
+    std::vector<u8> memory{mem_begin, mem_end};
+
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushIpcInterface<IStorage>(system, std::move(memory));
+}
+
+void ILibraryAppletCreator::CreateHandleStorage(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+
+    const s64 size{rp.Pop<s64>()};
+    const auto handle{ctx.GetCopyHandle(0)};
+
+    LOG_DEBUG(Service_AM, "called, size={}, handle={:08X}", size, handle);
+
+    if (size <= 0) {
+        LOG_ERROR(Service_AM, "size is less than or equal to 0");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_UNKNOWN);
+        return;
+    }
+
+    auto transfer_mem =
+        system.CurrentProcess()->GetHandleTable().GetObject<Kernel::KTransferMemory>(handle);
+
+    if (transfer_mem.IsNull()) {
+        LOG_ERROR(Service_AM, "transfer_mem is a nullptr for handle={:08X}", handle);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_UNKNOWN);
+        return;
+    }
+
+    const u8* const mem_begin = system.Memory().GetPointer(transfer_mem->GetSourceAddress());
     const u8* const mem_end = mem_begin + transfer_mem->GetSize();
     std::vector<u8> memory{mem_begin, mem_end};
 
@@ -1152,7 +1268,9 @@ void ILibraryAppletCreator::CreateTransferMemoryStorage(Kernel::HLERequestContex
 }
 
 IApplicationFunctions::IApplicationFunctions(Core::System& system_)
-    : ServiceFramework{system_, "IApplicationFunctions"} {
+    : ServiceFramework{system_, "IApplicationFunctions"}, gpu_error_detected_event{system.Kernel()},
+      friend_invitation_storage_channel_event{system.Kernel()},
+      health_warning_disappeared_system_event{system.Kernel()} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {1, &IApplicationFunctions::PopLaunchParameter, "PopLaunchParameter"},
@@ -1170,15 +1288,18 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
         {25, &IApplicationFunctions::ExtendSaveData, "ExtendSaveData"},
         {26, &IApplicationFunctions::GetSaveDataSize, "GetSaveDataSize"},
         {27, nullptr, "CreateCacheStorage"},
+        {28, nullptr, "GetSaveDataSizeMax"},
+        {29, nullptr, "GetCacheStorageMax"},
         {30, &IApplicationFunctions::BeginBlockingHomeButtonShortAndLongPressed, "BeginBlockingHomeButtonShortAndLongPressed"},
         {31, &IApplicationFunctions::EndBlockingHomeButtonShortAndLongPressed, "EndBlockingHomeButtonShortAndLongPressed"},
         {32, &IApplicationFunctions::BeginBlockingHomeButton, "BeginBlockingHomeButton"},
         {33, &IApplicationFunctions::EndBlockingHomeButton, "EndBlockingHomeButton"},
         {34, nullptr, "SelectApplicationLicense"},
+        {35, nullptr, "GetDeviceSaveDataSizeMax"},
         {40, &IApplicationFunctions::NotifyRunning, "NotifyRunning"},
         {50, &IApplicationFunctions::GetPseudoDeviceId, "GetPseudoDeviceId"},
         {60, nullptr, "SetMediaPlaybackStateForApplication"},
-        {65, nullptr, "IsGamePlayRecordingSupported"},
+        {65, &IApplicationFunctions::IsGamePlayRecordingSupported, "IsGamePlayRecordingSupported"},
         {66, &IApplicationFunctions::InitializeGamePlayRecording, "InitializeGamePlayRecording"},
         {67, &IApplicationFunctions::SetGamePlayRecordingState, "SetGamePlayRecordingState"},
         {68, nullptr, "RequestFlushGamePlayingMovieForDebug"},
@@ -1198,14 +1319,17 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
         {123, &IApplicationFunctions::GetPreviousProgramIndex, "GetPreviousProgramIndex"},
         {124, nullptr, "EnableApplicationAllThreadDumpOnCrash"},
         {130, &IApplicationFunctions::GetGpuErrorDetectedSystemEvent, "GetGpuErrorDetectedSystemEvent"},
+        {131, nullptr, "SetDelayTimeToAbortOnGpuError"},
         {140, &IApplicationFunctions::GetFriendInvitationStorageChannelEvent, "GetFriendInvitationStorageChannelEvent"},
-        {141, nullptr, "TryPopFromFriendInvitationStorageChannel"},
+        {141, &IApplicationFunctions::TryPopFromFriendInvitationStorageChannel, "TryPopFromFriendInvitationStorageChannel"},
         {150, nullptr, "GetNotificationStorageChannelEvent"},
         {151, nullptr, "TryPopFromNotificationStorageChannel"},
-        {160, nullptr, "GetHealthWarningDisappearedSystemEvent"},
+        {160, &IApplicationFunctions::GetHealthWarningDisappearedSystemEvent, "GetHealthWarningDisappearedSystemEvent"},
         {170, nullptr, "SetHdcpAuthenticationActivated"},
         {180, nullptr, "GetLaunchRequiredVersion"},
         {181, nullptr, "UpgradeLaunchRequiredVersion"},
+        {190, nullptr, "SendServerMaintenanceOverlayNotification"},
+        {200, nullptr, "GetLastApplicationExitReason"},
         {500, nullptr, "StartContinuousRecordingFlushForDebug"},
         {1000, nullptr, "CreateMovieMaker"},
         {1001, nullptr, "PrepareForJit"},
@@ -1214,12 +1338,15 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_)
 
     RegisterHandlers(functions);
 
-    auto& kernel = system.Kernel();
-    gpu_error_detected_event = Kernel::WritableEvent::CreateEventPair(
-        kernel, "IApplicationFunctions:GpuErrorDetectedSystemEvent");
+    Kernel::KAutoObject::Create(std::addressof(gpu_error_detected_event));
+    Kernel::KAutoObject::Create(std::addressof(friend_invitation_storage_channel_event));
+    Kernel::KAutoObject::Create(std::addressof(health_warning_disappeared_system_event));
 
-    friend_invitation_storage_channel_event = Kernel::WritableEvent::CreateEventPair(
-        kernel, "IApplicationFunctions:FriendInvitationStorageChannelEvent");
+    gpu_error_detected_event.Initialize("IApplicationFunctions:GpuErrorDetectedSystemEvent");
+    friend_invitation_storage_channel_event.Initialize(
+        "IApplicationFunctions:FriendInvitationStorageChannelEvent");
+    health_warning_disappeared_system_event.Initialize(
+        "IApplicationFunctions:HealthWarningDisappearedSystemEvent");
 }
 
 IApplicationFunctions::~IApplicationFunctions() = default;
@@ -1386,9 +1513,9 @@ void IApplicationFunctions::GetDisplayVersion(Kernel::HLERequestContext& ctx) {
 
         const FileSys::PatchManager pm{title_id, system.GetFileSystemController(),
                                        system.GetContentProvider()};
-        auto res = pm.GetControlMetadata();
-        if (res.first != nullptr) {
-            return res;
+        auto metadata = pm.GetControlMetadata();
+        if (metadata.first != nullptr) {
+            return metadata;
         }
 
         const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(title_id),
@@ -1423,9 +1550,9 @@ void IApplicationFunctions::GetDesiredLanguage(Kernel::HLERequestContext& ctx) {
 
         const FileSys::PatchManager pm{title_id, system.GetFileSystemController(),
                                        system.GetContentProvider()};
-        auto res = pm.GetControlMetadata();
-        if (res.first != nullptr) {
-            return res;
+        auto metadata = pm.GetControlMetadata();
+        if (metadata.first != nullptr) {
+            return metadata;
         }
 
         const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(title_id),
@@ -1464,6 +1591,16 @@ void IApplicationFunctions::GetDesiredLanguage(Kernel::HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 4};
     rb.Push(RESULT_SUCCESS);
     rb.Push(*res_code);
+}
+
+void IApplicationFunctions::IsGamePlayRecordingSupported(Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    constexpr bool gameplay_recording_supported = false;
+
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push(gameplay_recording_supported);
 }
 
 void IApplicationFunctions::InitializeGamePlayRecording(Kernel::HLERequestContext& ctx) {
@@ -1606,7 +1743,7 @@ void IApplicationFunctions::GetGpuErrorDetectedSystemEvent(Kernel::HLERequestCon
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(gpu_error_detected_event.readable);
+    rb.PushCopyObjects(gpu_error_detected_event.GetReadableEvent());
 }
 
 void IApplicationFunctions::GetFriendInvitationStorageChannelEvent(Kernel::HLERequestContext& ctx) {
@@ -1614,7 +1751,23 @@ void IApplicationFunctions::GetFriendInvitationStorageChannelEvent(Kernel::HLERe
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(friend_invitation_storage_channel_event.readable);
+    rb.PushCopyObjects(friend_invitation_storage_channel_event.GetReadableEvent());
+}
+
+void IApplicationFunctions::TryPopFromFriendInvitationStorageChannel(
+    Kernel::HLERequestContext& ctx) {
+    LOG_WARNING(Service_AM, "(STUBBED) called");
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ERR_NO_DATA_IN_CHANNEL);
+}
+
+void IApplicationFunctions::GetHealthWarningDisappearedSystemEvent(Kernel::HLERequestContext& ctx) {
+    LOG_DEBUG(Service_AM, "called");
+
+    IPC::ResponseBuilder rb{ctx, 2, 1};
+    rb.Push(RESULT_SUCCESS);
+    rb.PushCopyObjects(health_warning_disappeared_system_event.GetReadableEvent());
 }
 
 void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger& nvflinger,
@@ -1632,7 +1785,8 @@ void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger
 }
 
 IHomeMenuFunctions::IHomeMenuFunctions(Core::System& system_)
-    : ServiceFramework{system_, "IHomeMenuFunctions"} {
+    : ServiceFramework{system_, "IHomeMenuFunctions"}, pop_from_general_channel_event{
+                                                           system.Kernel()} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {10, &IHomeMenuFunctions::RequestToGetForeground, "RequestToGetForeground"},
@@ -1642,16 +1796,19 @@ IHomeMenuFunctions::IHomeMenuFunctions(Core::System& system_)
         {21, &IHomeMenuFunctions::GetPopFromGeneralChannelEvent, "GetPopFromGeneralChannelEvent"},
         {30, nullptr, "GetHomeButtonWriterLockAccessor"},
         {31, nullptr, "GetWriterLockAccessorEx"},
+        {40, nullptr, "IsSleepEnabled"},
+        {41, nullptr, "IsRebootEnabled"},
         {100, nullptr, "PopRequestLaunchApplicationForDebug"},
         {110, nullptr, "IsForceTerminateApplicationDisabledForDebug"},
         {200, nullptr, "LaunchDevMenu"},
+        {1000, nullptr, "SetLastApplicationExitReason"},
     };
     // clang-format on
 
     RegisterHandlers(functions);
 
-    pop_from_general_channel_event = Kernel::WritableEvent::CreateEventPair(
-        system.Kernel(), "IHomeMenuFunctions:PopFromGeneralChannelEvent");
+    Kernel::KAutoObject::Create(std::addressof(pop_from_general_channel_event));
+    pop_from_general_channel_event.Initialize("IHomeMenuFunctions:PopFromGeneralChannelEvent");
 }
 
 IHomeMenuFunctions::~IHomeMenuFunctions() = default;
@@ -1668,7 +1825,7 @@ void IHomeMenuFunctions::GetPopFromGeneralChannelEvent(Kernel::HLERequestContext
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(pop_from_general_channel_event.readable);
+    rb.PushCopyObjects(pop_from_general_channel_event.GetReadableEvent());
 }
 
 IGlobalStateController::IGlobalStateController(Core::System& system_)
@@ -1687,6 +1844,7 @@ IGlobalStateController::IGlobalStateController(Core::System& system_)
         {13, nullptr, "UpdateDefaultDisplayResolution"},
         {14, nullptr, "ShouldSleepOnBoot"},
         {15, nullptr, "GetHdcpAuthenticationFailedEvent"},
+        {30, nullptr, "OpenCradleFirmwareUpdater"},
     };
     // clang-format on
 

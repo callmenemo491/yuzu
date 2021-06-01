@@ -7,7 +7,7 @@
 #include "core/file_sys/errors.h"
 #include "core/file_sys/system_archive/system_version.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/client_port.h"
+#include "core/hle/kernel/k_client_port.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/set/set_sys.h"
 
@@ -261,6 +261,10 @@ SET_SYS::SET_SYS(Core::System& system_) : ServiceFramework{system_, "set:sys"} {
         {155, nullptr, "SetAccountOnlineStorageSettings"},
         {156, nullptr, "GetPctlReadyFlag"},
         {157, nullptr, "SetPctlReadyFlag"},
+        {158, nullptr, "GetAnalogStickUserCalibrationL"},
+        {159, nullptr, "SetAnalogStickUserCalibrationL"},
+        {160, nullptr, "GetAnalogStickUserCalibrationR"},
+        {161, nullptr, "SetAnalogStickUserCalibrationR"},
         {162, nullptr, "GetPtmBatteryVersion"},
         {163, nullptr, "SetPtmBatteryVersion"},
         {164, nullptr, "GetUsb30HostEnableFlag"},
@@ -302,6 +306,8 @@ SET_SYS::SET_SYS(Core::System& system_) : ServiceFramework{system_, "set:sys"} {
         {200, nullptr, "SetButtonConfigRegisteredSettings"},
         {201, nullptr, "GetFieldTestingFlag"},
         {202, nullptr, "SetFieldTestingFlag"},
+        {203, nullptr, "GetPanelCrcMode"},
+        {204, nullptr, "SetPanelCrcMode"},
     };
     // clang-format on
 

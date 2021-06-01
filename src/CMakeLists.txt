@@ -27,6 +27,7 @@ if (MSVC)
     # /Zo                 - Enhanced debug info for optimized builds
     # /permissive-        - Enables stricter C++ standards conformance checks
     # /EHsc               - C++-only exception handling semantics
+    # /utf-8              - Set source and execution character sets to UTF-8
     # /volatile:iso       - Use strict standards-compliant volatile semantics.
     # /Zc:externConstexpr - Allow extern constexpr variables to have external linkage, like the standard mandates
     # /Zc:inline          - Let codegen omit inline functions in object files
@@ -38,6 +39,7 @@ if (MSVC)
         /permissive-
         /EHsc
         /std:c++latest
+        /utf-8
         /volatile:iso
         /Zc:externConstexpr
         /Zc:inline
@@ -45,10 +47,16 @@ if (MSVC)
 
         # Warnings
         /W3
+        /we4062 # enumerator 'identifier' in a switch of enum 'enumeration' is not handled
+        /we4101 # 'identifier': unreferenced local variable
+        /we4265 # 'class': class has virtual functions, but destructor is not virtual
+        /we4388 # signed/unsigned mismatch
         /we4547 # 'operator' : operator before comma has no effect; expected operator with side-effect
         /we4549 # 'operator1': operator before comma has no effect; did you intend 'operator2'?
         /we4555 # Expression has no effect; expected expression with side-effect
+        /we4715 # 'function': not all control paths return a value
         /we4834 # Discarding return value of function with 'nodiscard' attribute
+        /we5038 # data member 'member1' will be initialized after data member 'member2'
     )
 
     # /GS- - No stack buffer overflow checks
@@ -59,11 +67,16 @@ if (MSVC)
 else()
     add_compile_options(
         -Wall
+        -Werror=array-bounds
         -Werror=implicit-fallthrough
         -Werror=missing-declarations
+        -Werror=missing-field-initializers
         -Werror=reorder
+        -Werror=switch
         -Werror=uninitialized
+        -Werror=unused-function
         -Werror=unused-result
+        -Werror=unused-variable
         -Wextra
         -Wmissing-declarations
         -Wno-attributes
@@ -122,7 +135,6 @@ add_subdirectory(tests)
 
 if (ENABLE_SDL2)
     add_subdirectory(yuzu_cmd)
-    add_subdirectory(yuzu_tester)
 endif()
 
 if (ENABLE_QT)

@@ -7,16 +7,16 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
 
 namespace Service::NVFlinger {
 
-BufferQueue::BufferQueue(Kernel::KernelCore& kernel, u32 id, u64 layer_id)
-    : id(id), layer_id(layer_id) {
-    buffer_wait_event = Kernel::WritableEvent::CreateEventPair(kernel, "BufferQueue NativeHandle");
+BufferQueue::BufferQueue(Kernel::KernelCore& kernel, u32 id_, u64 layer_id_)
+    : id(id_), layer_id(layer_id_), buffer_wait_event{kernel} {
+    Kernel::KAutoObject::Create(std::addressof(buffer_wait_event));
+    buffer_wait_event.Initialize("BufferQueue:WaitEvent");
 }
 
 BufferQueue::~BufferQueue() = default;
@@ -26,10 +26,10 @@ void BufferQueue::SetPreallocatedBuffer(u32 slot, const IGBPBuffer& igbp_buffer)
     LOG_WARNING(Service, "Adding graphics buffer {}", slot);
 
     {
-        std::unique_lock lock{queue_mutex};
+        std::unique_lock lock{free_buffers_mutex};
         free_buffers.push_back(slot);
     }
-    condition.notify_one();
+    free_buffers_condition.notify_one();
 
     buffers[slot] = {
         .slot = slot,
@@ -41,15 +41,15 @@ void BufferQueue::SetPreallocatedBuffer(u32 slot, const IGBPBuffer& igbp_buffer)
         .multi_fence = {},
     };
 
-    buffer_wait_event.writable->Signal();
+    buffer_wait_event.GetWritableEvent().Signal();
 }
 
 std::optional<std::pair<u32, Service::Nvidia::MultiFence*>> BufferQueue::DequeueBuffer(u32 width,
                                                                                        u32 height) {
     // Wait for first request before trying to dequeue
     {
-        std::unique_lock lock{queue_mutex};
-        condition.wait(lock, [this] { return !free_buffers.empty() || !is_connect; });
+        std::unique_lock lock{free_buffers_mutex};
+        free_buffers_condition.wait(lock, [this] { return !free_buffers.empty() || !is_connect; });
     }
 
     if (!is_connect) {
@@ -58,7 +58,7 @@ std::optional<std::pair<u32, Service::Nvidia::MultiFence*>> BufferQueue::Dequeue
         return std::nullopt;
     }
 
-    std::unique_lock lock{queue_mutex};
+    std::unique_lock lock{free_buffers_mutex};
 
     auto f_itr = free_buffers.begin();
     auto slot = buffers.size();
@@ -100,6 +100,7 @@ void BufferQueue::QueueBuffer(u32 slot, BufferTransformFlags transform,
     buffers[slot].crop_rect = crop_rect;
     buffers[slot].swap_interval = swap_interval;
     buffers[slot].multi_fence = multi_fence;
+    std::unique_lock lock{queue_sequence_mutex};
     queue_sequence.push_back(slot);
 }
 
@@ -113,15 +114,16 @@ void BufferQueue::CancelBuffer(u32 slot, const Service::Nvidia::MultiFence& mult
     buffers[slot].swap_interval = 0;
 
     {
-        std::unique_lock lock{queue_mutex};
+        std::unique_lock lock{free_buffers_mutex};
         free_buffers.push_back(slot);
     }
-    condition.notify_one();
+    free_buffers_condition.notify_one();
 
-    buffer_wait_event.writable->Signal();
+    buffer_wait_event.GetWritableEvent().Signal();
 }
 
 std::optional<std::reference_wrapper<const BufferQueue::Buffer>> BufferQueue::AcquireBuffer() {
+    std::unique_lock lock{queue_sequence_mutex};
     std::size_t buffer_slot = buffers.size();
     // Iterate to find a queued buffer matching the requested slot.
     while (buffer_slot == buffers.size() && !queue_sequence.empty()) {
@@ -147,27 +149,29 @@ void BufferQueue::ReleaseBuffer(u32 slot) {
 
     buffers[slot].status = Buffer::Status::Free;
     {
-        std::unique_lock lock{queue_mutex};
+        std::unique_lock lock{free_buffers_mutex};
         free_buffers.push_back(slot);
     }
-    condition.notify_one();
+    free_buffers_condition.notify_one();
 
-    buffer_wait_event.writable->Signal();
+    buffer_wait_event.GetWritableEvent().Signal();
 }
 
 void BufferQueue::Connect() {
+    std::unique_lock lock{queue_sequence_mutex};
     queue_sequence.clear();
-    id = 1;
-    layer_id = 1;
     is_connect = true;
 }
 
 void BufferQueue::Disconnect() {
     buffers.fill({});
-    queue_sequence.clear();
-    buffer_wait_event.writable->Signal();
+    {
+        std::unique_lock lock{queue_sequence_mutex};
+        queue_sequence.clear();
+    }
+    buffer_wait_event.GetWritableEvent().Signal();
     is_connect = false;
-    condition.notify_one();
+    free_buffers_condition.notify_one();
 }
 
 u32 BufferQueue::Query(QueryType type) {
@@ -176,18 +180,20 @@ u32 BufferQueue::Query(QueryType type) {
     switch (type) {
     case QueryType::NativeWindowFormat:
         return static_cast<u32>(PixelFormat::RGBA8888);
+    case QueryType::NativeWindowWidth:
+    case QueryType::NativeWindowHeight:
+        break;
     }
-
-    UNIMPLEMENTED();
+    UNIMPLEMENTED_MSG("Unimplemented query type={}", type);
     return 0;
 }
 
-std::shared_ptr<Kernel::WritableEvent> BufferQueue::GetWritableBufferWaitEvent() const {
-    return buffer_wait_event.writable;
+Kernel::KWritableEvent& BufferQueue::GetWritableBufferWaitEvent() {
+    return buffer_wait_event.GetWritableEvent();
 }
 
-std::shared_ptr<Kernel::ReadableEvent> BufferQueue::GetBufferWaitEvent() const {
-    return buffer_wait_event.readable;
+Kernel::KReadableEvent& BufferQueue::GetBufferWaitEvent() {
+    return buffer_wait_event.GetReadableEvent();
 }
 
 } // namespace Service::NVFlinger

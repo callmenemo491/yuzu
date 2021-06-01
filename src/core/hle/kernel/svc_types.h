@@ -23,8 +23,8 @@ enum class MemoryState : u32 {
     Ipc = 0x0A,
     Stack = 0x0B,
     ThreadLocal = 0x0C,
-    Transfered = 0x0D,
-    SharedTransfered = 0x0E,
+    Transferred = 0x0D,
+    SharedTransferred = 0x0E,
     SharedCode = 0x0F,
     Inaccessible = 0x10,
     NonSecureIpc = 0x11,
@@ -64,5 +64,35 @@ struct MemoryInfo {
     u32 device_refcount{};
     u32 padding{};
 };
+
+enum class SignalType : u32 {
+    Signal = 0,
+    SignalAndIncrementIfEqual = 1,
+    SignalAndModifyByWaitingCountIfEqual = 2,
+};
+
+enum class ArbitrationType : u32 {
+    WaitIfLessThan = 0,
+    DecrementAndWaitIfLessThan = 1,
+    WaitIfEqual = 2,
+};
+
+enum class YieldType : s64 {
+    WithoutCoreMigration = 0,
+    WithCoreMigration = -1,
+    ToAnyThread = -2,
+};
+
+enum class ThreadActivity : u32 {
+    Runnable = 0,
+    Paused = 1,
+};
+
+constexpr inline s32 IdealCoreDontCare = -1;
+constexpr inline s32 IdealCoreUseProcessValue = -2;
+constexpr inline s32 IdealCoreNoUpdate = -3;
+
+constexpr inline s32 LowestThreadPriority = 63;
+constexpr inline s32 HighestThreadPriority = 0;
 
 } // namespace Kernel::Svc

@@ -13,12 +13,11 @@
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "core/hle/ipc.h"
-#include "core/hle/kernel/client_port.h"
-#include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/hle_ipc.h"
-#include "core/hle/kernel/object.h"
-#include "core/hle/kernel/server_session.h"
-#include "core/hle/kernel/session.h"
+#include "core/hle/kernel/k_client_port.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_resource_limit.h"
+#include "core/hle/kernel/k_session.h"
 #include "core/hle/result.h"
 
 namespace IPC {
@@ -29,19 +28,19 @@ class RequestHelperBase {
 protected:
     Kernel::HLERequestContext* context = nullptr;
     u32* cmdbuf;
-    ptrdiff_t index = 0;
+    u32 index = 0;
 
 public:
     explicit RequestHelperBase(u32* command_buffer) : cmdbuf(command_buffer) {}
 
-    explicit RequestHelperBase(Kernel::HLERequestContext& context)
-        : context(&context), cmdbuf(context.CommandBuffer()) {}
+    explicit RequestHelperBase(Kernel::HLERequestContext& ctx)
+        : context(&ctx), cmdbuf(ctx.CommandBuffer()) {}
 
     void Skip(u32 size_in_words, bool set_to_null) {
         if (set_to_null) {
             memset(cmdbuf + index, 0, size_in_words * sizeof(u32));
         }
-        index += static_cast<ptrdiff_t>(size_in_words);
+        index += size_in_words;
     }
 
     /**
@@ -54,11 +53,11 @@ public:
     }
 
     u32 GetCurrentOffset() const {
-        return static_cast<u32>(index);
+        return index;
     }
 
     void SetCurrentOffset(u32 offset) {
-        index = static_cast<ptrdiff_t>(offset);
+        index = offset;
     }
 };
 
@@ -72,38 +71,45 @@ public:
         AlwaysMoveHandles = 1,
     };
 
-    explicit ResponseBuilder(Kernel::HLERequestContext& context, u32 normal_params_size,
-                             u32 num_handles_to_copy = 0, u32 num_objects_to_move = 0,
+    explicit ResponseBuilder(Kernel::HLERequestContext& ctx, u32 normal_params_size_,
+                             u32 num_handles_to_copy_ = 0, u32 num_objects_to_move_ = 0,
                              Flags flags = Flags::None)
-        : RequestHelperBase(context), normal_params_size(normal_params_size),
-          num_handles_to_copy(num_handles_to_copy),
-          num_objects_to_move(num_objects_to_move), kernel{context.kernel} {
+        : RequestHelperBase(ctx), normal_params_size(normal_params_size_),
+          num_handles_to_copy(num_handles_to_copy_),
+          num_objects_to_move(num_objects_to_move_), kernel{ctx.kernel} {
 
         memset(cmdbuf, 0, sizeof(u32) * IPC::COMMAND_BUFFER_LENGTH);
-
-        context.ClearIncomingObjects();
 
         IPC::CommandHeader header{};
 
         // The entire size of the raw data section in u32 units, including the 16 bytes of mandatory
         // padding.
-        u64 raw_data_size = sizeof(IPC::DataPayloadHeader) / 4 + 4 + normal_params_size;
-
+        u32 raw_data_size = ctx.write_size =
+            ctx.IsTipc() ? normal_params_size - 1 : normal_params_size;
         u32 num_handles_to_move{};
         u32 num_domain_objects{};
         const bool always_move_handles{
             (static_cast<u32>(flags) & static_cast<u32>(Flags::AlwaysMoveHandles)) != 0};
-        if (!context.Session()->IsDomain() || always_move_handles) {
+        if (!ctx.Session()->IsDomain() || always_move_handles) {
             num_handles_to_move = num_objects_to_move;
         } else {
             num_domain_objects = num_objects_to_move;
         }
 
-        if (context.Session()->IsDomain()) {
-            raw_data_size += sizeof(DomainMessageHeader) / 4 + num_domain_objects;
+        if (ctx.Session()->IsDomain()) {
+            raw_data_size +=
+                static_cast<u32>(sizeof(DomainMessageHeader) / sizeof(u32) + num_domain_objects);
+            ctx.write_size += num_domain_objects;
         }
 
-        header.data_size.Assign(static_cast<u32>(raw_data_size));
+        if (ctx.IsTipc()) {
+            header.type.Assign(ctx.GetCommandType());
+        } else {
+            raw_data_size += static_cast<u32>(sizeof(IPC::DataPayloadHeader) / sizeof(u32) + 4 +
+                                              normal_params_size);
+        }
+
+        header.data_size.Assign(raw_data_size);
         if (num_handles_to_copy || num_handles_to_move) {
             header.enable_handle_descriptor.Assign(1);
         }
@@ -111,25 +117,34 @@ public:
 
         if (header.enable_handle_descriptor) {
             IPC::HandleDescriptorHeader handle_descriptor_header{};
-            handle_descriptor_header.num_handles_to_copy.Assign(num_handles_to_copy);
+            handle_descriptor_header.num_handles_to_copy.Assign(num_handles_to_copy_);
             handle_descriptor_header.num_handles_to_move.Assign(num_handles_to_move);
             PushRaw(handle_descriptor_header);
+
+            ctx.handles_offset = index;
+
             Skip(num_handles_to_copy + num_handles_to_move, true);
         }
 
-        AlignWithPadding();
+        if (!ctx.IsTipc()) {
+            AlignWithPadding();
 
-        if (context.Session()->IsDomain() && context.HasDomainMessageHeader()) {
-            IPC::DomainMessageHeader domain_header{};
-            domain_header.num_objects = num_domain_objects;
-            PushRaw(domain_header);
+            if (ctx.Session()->IsDomain() && ctx.HasDomainMessageHeader()) {
+                IPC::DomainMessageHeader domain_header{};
+                domain_header.num_objects = num_domain_objects;
+                PushRaw(domain_header);
+            }
+
+            IPC::DataPayloadHeader data_payload_header{};
+            data_payload_header.magic = Common::MakeMagic('S', 'F', 'C', 'O');
+            PushRaw(data_payload_header);
         }
 
-        IPC::DataPayloadHeader data_payload_header{};
-        data_payload_header.magic = Common::MakeMagic('S', 'F', 'C', 'O');
-        PushRaw(data_payload_header);
+        data_payload_index = index;
 
-        datapayload_index = index;
+        ctx.data_payload_offset = index;
+        ctx.write_size += index;
+        ctx.domain_offset = static_cast<u32>(index + raw_data_size / sizeof(u32));
     }
 
     template <class T>
@@ -137,33 +152,20 @@ public:
         if (context->Session()->IsDomain()) {
             context->AddDomainObject(std::move(iface));
         } else {
-            auto [client, server] = Kernel::Session::Create(kernel, iface->GetServiceName());
-            context->AddMoveObject(std::move(client));
-            iface->ClientConnected(std::move(server));
+            kernel.CurrentProcess()->GetResourceLimit()->Reserve(
+                Kernel::LimitableResource::Sessions, 1);
+
+            auto* session = Kernel::KSession::Create(kernel);
+            session->Initialize(nullptr, iface->GetServiceName());
+
+            context->AddMoveObject(&session->GetClientSession());
+            iface->ClientConnected(&session->GetServerSession());
         }
     }
 
     template <class T, class... Args>
     void PushIpcInterface(Args&&... args) {
         PushIpcInterface<T>(std::make_shared<T>(std::forward<Args>(args)...));
-    }
-
-    void ValidateHeader() {
-        const std::size_t num_domain_objects = context->NumDomainObjects();
-        const std::size_t num_move_objects = context->NumMoveObjects();
-        ASSERT_MSG(!num_domain_objects || !num_move_objects,
-                   "cannot move normal handles and domain objects");
-        ASSERT_MSG((index - datapayload_index) == normal_params_size,
-                   "normal_params_size value is incorrect");
-        ASSERT_MSG((num_domain_objects + num_move_objects) == num_objects_to_move,
-                   "num_objects_to_move value is incorrect");
-        ASSERT_MSG(context->NumCopyObjects() == num_handles_to_copy,
-                   "num_handles_to_copy value is incorrect");
-    }
-
-    // Validate on destruction, as there shouldn't be any case where we don't want it
-    ~ResponseBuilder() {
-        ValidateHeader();
     }
 
     void PushImpl(s8 value);
@@ -215,23 +217,29 @@ public:
     void PushRaw(const T& value);
 
     template <typename... O>
-    void PushMoveObjects(std::shared_ptr<O>... pointers);
+    void PushMoveObjects(O*... pointers);
 
     template <typename... O>
-    void PushCopyObjects(std::shared_ptr<O>... pointers);
+    void PushMoveObjects(O&... pointers);
+
+    template <typename... O>
+    void PushCopyObjects(O*... pointers);
+
+    template <typename... O>
+    void PushCopyObjects(O&... pointers);
 
 private:
     u32 normal_params_size{};
     u32 num_handles_to_copy{};
     u32 num_objects_to_move{}; ///< Domain objects or move handles, context dependent
-    std::ptrdiff_t datapayload_index{};
+    u32 data_payload_index{};
     Kernel::KernelCore& kernel;
 };
 
 /// Push ///
 
 inline void ResponseBuilder::PushImpl(s32 value) {
-    cmdbuf[index++] = static_cast<u32>(value);
+    cmdbuf[index++] = value;
 }
 
 inline void ResponseBuilder::PushImpl(u32 value) {
@@ -301,18 +309,34 @@ void ResponseBuilder::Push(const First& first_value, const Other&... other_value
 }
 
 template <typename... O>
-inline void ResponseBuilder::PushCopyObjects(std::shared_ptr<O>... pointers) {
+inline void ResponseBuilder::PushCopyObjects(O*... pointers) {
     auto objects = {pointers...};
     for (auto& object : objects) {
-        context->AddCopyObject(std::move(object));
+        context->AddCopyObject(object);
     }
 }
 
 template <typename... O>
-inline void ResponseBuilder::PushMoveObjects(std::shared_ptr<O>... pointers) {
+inline void ResponseBuilder::PushCopyObjects(O&... pointers) {
+    auto objects = {&pointers...};
+    for (auto& object : objects) {
+        context->AddCopyObject(object);
+    }
+}
+
+template <typename... O>
+inline void ResponseBuilder::PushMoveObjects(O*... pointers) {
     auto objects = {pointers...};
     for (auto& object : objects) {
-        context->AddMoveObject(std::move(object));
+        context->AddMoveObject(object);
+    }
+}
+
+template <typename... O>
+inline void ResponseBuilder::PushMoveObjects(O&... pointers) {
+    auto objects = {&pointers...};
+    for (auto& object : objects) {
+        context->AddMoveObject(object);
     }
 }
 
@@ -320,9 +344,9 @@ class RequestParser : public RequestHelperBase {
 public:
     explicit RequestParser(u32* command_buffer) : RequestHelperBase(command_buffer) {}
 
-    explicit RequestParser(Kernel::HLERequestContext& context) : RequestHelperBase(context) {
-        ASSERT_MSG(context.GetDataPayloadOffset(), "context is incomplete");
-        Skip(context.GetDataPayloadOffset(), false);
+    explicit RequestParser(Kernel::HLERequestContext& ctx) : RequestHelperBase(ctx) {
+        ASSERT_MSG(ctx.GetDataPayloadOffset(), "context is incomplete");
+        Skip(ctx.GetDataPayloadOffset(), false);
         // Skip the u64 command id, it's already stored in the context
         static constexpr u32 CommandIdSize = 2;
         Skip(CommandIdSize, false);
@@ -359,17 +383,11 @@ public:
     template <typename T>
     T PopRaw();
 
-    template <typename T>
-    std::shared_ptr<T> GetMoveObject(std::size_t index);
-
-    template <typename T>
-    std::shared_ptr<T> GetCopyObject(std::size_t index);
-
     template <class T>
     std::shared_ptr<T> PopIpcInterface() {
         ASSERT(context->Session()->IsDomain());
         ASSERT(context->GetDomainMessageHeader().input_object_count > 0);
-        return context->GetDomainRequestHandler<T>(Pop<u32>() - 1);
+        return context->GetDomainHandler<T>(Pop<u32>() - 1);
     }
 };
 
@@ -467,16 +485,6 @@ template <typename First, typename... Other>
 void RequestParser::Pop(First& first_value, Other&... other_values) {
     first_value = Pop<First>();
     Pop(other_values...);
-}
-
-template <typename T>
-std::shared_ptr<T> RequestParser::GetMoveObject(std::size_t index) {
-    return context->GetMoveObject<T>(index);
-}
-
-template <typename T>
-std::shared_ptr<T> RequestParser::GetCopyObject(std::size_t index) {
-    return context->GetCopyObject<T>(index);
 }
 
 } // namespace IPC

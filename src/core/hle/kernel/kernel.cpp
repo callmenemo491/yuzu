@@ -1,4 +1,4 @@
-// Copyright 2014 Citra Emulator Project
+// Copyright 2021 yuzu Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "common/assert.h"
+#include "common/common_sizes.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/thread.h"
@@ -25,24 +26,25 @@
 #include "core/cpu_manager.h"
 #include "core/device_memory.h"
 #include "core/hardware_properties.h"
-#include "core/hle/kernel/client_port.h"
-#include "core/hle/kernel/errors.h"
-#include "core/hle/kernel/handle_table.h"
+#include "core/hle/kernel/init/init_slab_setup.h"
+#include "core/hle/kernel/k_client_port.h"
+#include "core/hle/kernel/k_handle_table.h"
+#include "core/hle/kernel/k_memory_layout.h"
+#include "core/hle/kernel/k_memory_manager.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_resource_limit.h"
 #include "core/hle/kernel/k_scheduler.h"
+#include "core/hle/kernel/k_shared_memory.h"
+#include "core/hle/kernel/k_slab_heap.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/memory/memory_layout.h"
-#include "core/hle/kernel/memory/memory_manager.h"
-#include "core/hle/kernel/memory/slab_heap.h"
 #include "core/hle/kernel/physical_core.h"
-#include "core/hle/kernel/process.h"
-#include "core/hle/kernel/resource_limit.h"
 #include "core/hle/kernel/service_thread.h"
-#include "core/hle/kernel/shared_memory.h"
-#include "core/hle/kernel/synchronization.h"
-#include "core/hle/kernel/thread.h"
+#include "core/hle/kernel/svc_results.h"
 #include "core/hle/kernel/time_manager.h"
 #include "core/hle/lock.h"
 #include "core/hle/result.h"
+#include "core/hle/service/sm/sm.h"
 #include "core/memory.h"
 
 MICROPROFILE_DEFINE(Kernel_SVC, "Kernel", "SVC", MP_RGB(70, 200, 70));
@@ -50,27 +52,38 @@ MICROPROFILE_DEFINE(Kernel_SVC, "Kernel", "SVC", MP_RGB(70, 200, 70));
 namespace Kernel {
 
 struct KernelCore::Impl {
-    explicit Impl(Core::System& system, KernelCore& kernel)
-        : synchronization{system}, time_manager{system}, global_handle_table{kernel}, system{
-                                                                                          system} {}
+    explicit Impl(Core::System& system_, KernelCore& kernel_)
+        : time_manager{system_}, object_list_container{kernel_}, system{system_} {}
 
-    void SetMulticore(bool is_multicore) {
-        this->is_multicore = is_multicore;
+    void SetMulticore(bool is_multi) {
+        is_multicore = is_multi;
     }
 
     void Initialize(KernelCore& kernel) {
-        RegisterHostThread();
-
         global_scheduler_context = std::make_unique<Kernel::GlobalSchedulerContext>(kernel);
+        global_handle_table = std::make_unique<Kernel::KHandleTable>(kernel);
+
         service_thread_manager =
             std::make_unique<Common::ThreadWorker>(1, "yuzu:ServiceThreadManager");
+        is_phantom_mode_for_singlecore = false;
 
         InitializePhysicalCores();
-        InitializeSystemResourceLimit(kernel);
-        InitializeMemoryLayout();
-        InitializePreemption(kernel);
+
+        // Derive the initial memory layout from the emulated board
+        Init::InitializeSlabResourceCounts(kernel);
+        KMemoryLayout memory_layout;
+        DeriveInitialMemoryLayout(memory_layout);
+        Init::InitializeSlabHeaps(system, memory_layout);
+
+        // Initialize kernel memory and resources.
+        InitializeSystemResourceLimit(kernel, system.CoreTiming(), memory_layout);
+        InitializeMemoryLayout(memory_layout);
+        InitializePageSlab();
         InitializeSchedulers();
         InitializeSuspendThreads();
+        InitializePreemption(kernel);
+
+        RegisterHostThread();
     }
 
     void InitializeCores() {
@@ -87,29 +100,49 @@ struct KernelCore::Impl {
         service_threads.clear();
 
         next_object_id = 0;
-        next_kernel_process_id = Process::InitialKIPIDMin;
-        next_user_process_id = Process::ProcessIDMin;
+        next_kernel_process_id = KProcess::InitialKIPIDMin;
+        next_user_process_id = KProcess::ProcessIDMin;
         next_thread_id = 1;
 
-        for (std::size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
-            if (suspend_threads[i]) {
-                suspend_threads[i].reset();
+        for (u32 core_id = 0; core_id < Core::Hardware::NUM_CPU_CORES; core_id++) {
+            if (suspend_threads[core_id]) {
+                suspend_threads[core_id]->Close();
+                suspend_threads[core_id] = nullptr;
             }
+
+            schedulers[core_id].reset();
         }
 
         cores.clear();
 
-        current_process = nullptr;
+        if (current_process) {
+            current_process->Close();
+            current_process = nullptr;
+        }
 
-        system_resource_limit = nullptr;
-
-        global_handle_table.Clear();
+        global_handle_table.reset();
 
         preemption_event = nullptr;
 
+        for (auto& iter : named_ports) {
+            iter.second->Close();
+        }
         named_ports.clear();
 
         exclusive_monitor.reset();
+
+        // Cleanup persistent kernel objects
+        auto CleanupObject = [](KAutoObject* obj) {
+            if (obj) {
+                obj->Close();
+                obj = nullptr;
+            }
+        };
+        CleanupObject(hid_shared_mem);
+        CleanupObject(font_shared_mem);
+        CleanupObject(irs_shared_mem);
+        CleanupObject(time_shared_mem);
+        CleanupObject(system_resource_limit);
 
         // Next host thead ID to use, 0-3 IDs represent core threads, >3 represent others
         next_host_thread_id = Core::Hardware::NUM_CPU_CORES;
@@ -118,34 +151,48 @@ struct KernelCore::Impl {
     void InitializePhysicalCores() {
         exclusive_monitor =
             Core::MakeExclusiveMonitor(system.Memory(), Core::Hardware::NUM_CPU_CORES);
-        for (std::size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
+        for (u32 i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
             schedulers[i] = std::make_unique<Kernel::KScheduler>(system, i);
             cores.emplace_back(i, system, *schedulers[i], interrupts);
         }
     }
 
     void InitializeSchedulers() {
-        for (std::size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
+        for (u32 i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
             cores[i].Scheduler().Initialize();
         }
     }
 
     // Creates the default system resource limit
-    void InitializeSystemResourceLimit(KernelCore& kernel) {
-        system_resource_limit = ResourceLimit::Create(kernel);
+    void InitializeSystemResourceLimit(KernelCore& kernel,
+                                       const Core::Timing::CoreTiming& core_timing,
+                                       const KMemoryLayout& memory_layout) {
+        system_resource_limit = KResourceLimit::Create(system.Kernel());
+        system_resource_limit->Initialize(&core_timing);
+
+        const auto [total_size, kernel_size] = memory_layout.GetTotalAndKernelMemorySizes();
 
         // If setting the default system values fails, then something seriously wrong has occurred.
-        ASSERT(system_resource_limit->SetLimitValue(ResourceType::PhysicalMemory, 0x100000000)
+        ASSERT(system_resource_limit->SetLimitValue(LimitableResource::PhysicalMemory, total_size)
                    .IsSuccess());
-        ASSERT(system_resource_limit->SetLimitValue(ResourceType::Threads, 800).IsSuccess());
-        ASSERT(system_resource_limit->SetLimitValue(ResourceType::Events, 700).IsSuccess());
-        ASSERT(system_resource_limit->SetLimitValue(ResourceType::TransferMemory, 200).IsSuccess());
-        ASSERT(system_resource_limit->SetLimitValue(ResourceType::Sessions, 900).IsSuccess());
+        ASSERT(system_resource_limit->SetLimitValue(LimitableResource::Threads, 800).IsSuccess());
+        ASSERT(system_resource_limit->SetLimitValue(LimitableResource::Events, 900).IsSuccess());
+        ASSERT(system_resource_limit->SetLimitValue(LimitableResource::TransferMemory, 200)
+                   .IsSuccess());
+        ASSERT(system_resource_limit->SetLimitValue(LimitableResource::Sessions, 1133).IsSuccess());
+        system_resource_limit->Reserve(LimitableResource::PhysicalMemory, kernel_size);
 
-        if (!system_resource_limit->Reserve(ResourceType::PhysicalMemory, 0) ||
-            !system_resource_limit->Reserve(ResourceType::PhysicalMemory, 0x60000)) {
-            UNREACHABLE();
-        }
+        // Reserve secure applet memory, introduced in firmware 5.0.0
+        constexpr u64 secure_applet_memory_size{Common::Size_4_MB};
+        ASSERT(system_resource_limit->Reserve(LimitableResource::PhysicalMemory,
+                                              secure_applet_memory_size));
+
+        // This memory seems to be reserved on hardware, but is not reserved/used by yuzu.
+        // Likely Horizon OS reserved memory
+        // TODO(ameerj): Derive the memory rather than hardcode it.
+        constexpr u64 unknown_reserved_memory{0x2f896000};
+        ASSERT(system_resource_limit->Reserve(LimitableResource::PhysicalMemory,
+                                              unknown_reserved_memory));
     }
 
     void InitializePreemption(KernelCore& kernel) {
@@ -166,21 +213,16 @@ struct KernelCore::Impl {
     }
 
     void InitializeSuspendThreads() {
-        for (std::size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
-            std::string name = "Suspend Thread Id:" + std::to_string(i);
-            std::function<void(void*)> init_func = Core::CpuManager::GetSuspendThreadStartFunc();
-            void* init_func_parameter = system.GetCpuManager().GetStartFuncParamater();
-            const auto type =
-                static_cast<ThreadType>(THREADTYPE_KERNEL | THREADTYPE_HLE | THREADTYPE_SUSPEND);
-            auto thread_res =
-                Thread::Create(system, type, std::move(name), 0, 0, 0, static_cast<u32>(i), 0,
-                               nullptr, std::move(init_func), init_func_parameter);
-
-            suspend_threads[i] = std::move(thread_res).Unwrap();
+        for (u32 core_id = 0; core_id < Core::Hardware::NUM_CPU_CORES; core_id++) {
+            suspend_threads[core_id] = KThread::Create(system.Kernel());
+            ASSERT(KThread::InitializeHighPriorityThread(system, suspend_threads[core_id], {}, {},
+                                                         core_id)
+                       .IsSuccess());
+            suspend_threads[core_id]->SetName(fmt::format("SuspendThread:{}", core_id));
         }
     }
 
-    void MakeCurrentProcess(Process* process) {
+    void MakeCurrentProcess(KProcess* process) {
         current_process = process;
         if (process == nullptr) {
             return;
@@ -209,6 +251,20 @@ struct KernelCore::Impl {
         return host_thread_id;
     }
 
+    // Gets the dummy KThread for the caller, allocating a new one if this is the first time
+    KThread* GetHostDummyThread() {
+        auto make_thread = [this]() {
+            std::unique_ptr<KThread> thread = std::make_unique<KThread>(system.Kernel());
+            KAutoObject::Create(thread.get());
+            ASSERT(KThread::InitializeDummyThread(thread.get()).IsSuccess());
+            thread->SetName(fmt::format("DummyThread:{}", GetHostThreadId()));
+            return thread;
+        };
+
+        thread_local auto thread = make_thread();
+        return thread.get();
+    }
+
     /// Registers a CPU core thread by allocating a host thread ID for it
     void RegisterCoreThread(std::size_t core_id) {
         ASSERT(core_id < Core::Hardware::NUM_CPU_CORES);
@@ -221,6 +277,7 @@ struct KernelCore::Impl {
     /// Registers a new host thread by allocating a host thread ID for it
     void RegisterHostThread() {
         [[maybe_unused]] const auto this_id = GetHostThreadId();
+        [[maybe_unused]] const auto dummy_thread = GetHostDummyThread();
     }
 
     [[nodiscard]] u32 GetCurrentHostThreadID() {
@@ -231,95 +288,377 @@ struct KernelCore::Impl {
         return this_id;
     }
 
-    [[nodiscard]] Core::EmuThreadHandle GetCurrentEmuThreadID() {
-        Core::EmuThreadHandle result = Core::EmuThreadHandle::InvalidHandle();
-        result.host_handle = GetCurrentHostThreadID();
-        if (result.host_handle >= Core::Hardware::NUM_CPU_CORES) {
-            return result;
-        }
-        const Kernel::KScheduler& sched = cores[result.host_handle].Scheduler();
-        const Kernel::Thread* current = sched.GetCurrentThread();
-        if (current != nullptr && !current->IsPhantomMode()) {
-            result.guest_handle = current->GetGlobalHandle();
-        } else {
-            result.guest_handle = InvalidHandle;
-        }
-        return result;
+    bool IsPhantomModeForSingleCore() const {
+        return is_phantom_mode_for_singlecore;
     }
 
-    void InitializeMemoryLayout() {
-        // Initialize memory layout
-        constexpr Memory::MemoryLayout layout{Memory::MemoryLayout::GetDefaultLayout()};
+    void SetIsPhantomModeForSingleCore(bool value) {
+        ASSERT(!is_multicore);
+        is_phantom_mode_for_singlecore = value;
+    }
+
+    KThread* GetCurrentEmuThread() {
+        const auto thread_id = GetCurrentHostThreadID();
+        if (thread_id >= Core::Hardware::NUM_CPU_CORES) {
+            return GetHostDummyThread();
+        }
+        return schedulers[thread_id]->GetCurrentThread();
+    }
+
+    void DeriveInitialMemoryLayout(KMemoryLayout& memory_layout) {
+        // Insert the root region for the virtual memory tree, from which all other regions will
+        // derive.
+        memory_layout.GetVirtualMemoryRegionTree().InsertDirectly(
+            KernelVirtualAddressSpaceBase,
+            KernelVirtualAddressSpaceBase + KernelVirtualAddressSpaceSize - 1);
+
+        // Insert the root region for the physical memory tree, from which all other regions will
+        // derive.
+        memory_layout.GetPhysicalMemoryRegionTree().InsertDirectly(
+            KernelPhysicalAddressSpaceBase,
+            KernelPhysicalAddressSpaceBase + KernelPhysicalAddressSpaceSize - 1);
+
+        // Save start and end for ease of use.
+        const VAddr code_start_virt_addr = KernelVirtualAddressCodeBase;
+        const VAddr code_end_virt_addr = KernelVirtualAddressCodeEnd;
+
+        // Setup the containing kernel region.
+        constexpr size_t KernelRegionSize = Common::Size_1_GB;
+        constexpr size_t KernelRegionAlign = Common::Size_1_GB;
+        constexpr VAddr kernel_region_start =
+            Common::AlignDown(code_start_virt_addr, KernelRegionAlign);
+        size_t kernel_region_size = KernelRegionSize;
+        if (!(kernel_region_start + KernelRegionSize - 1 <= KernelVirtualAddressSpaceLast)) {
+            kernel_region_size = KernelVirtualAddressSpaceEnd - kernel_region_start;
+        }
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+            kernel_region_start, kernel_region_size, KMemoryRegionType_Kernel));
+
+        // Setup the code region.
+        constexpr size_t CodeRegionAlign = PageSize;
+        constexpr VAddr code_region_start =
+            Common::AlignDown(code_start_virt_addr, CodeRegionAlign);
+        constexpr VAddr code_region_end = Common::AlignUp(code_end_virt_addr, CodeRegionAlign);
+        constexpr size_t code_region_size = code_region_end - code_region_start;
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+            code_region_start, code_region_size, KMemoryRegionType_KernelCode));
+
+        // Setup board-specific device physical regions.
+        Init::SetupDevicePhysicalMemoryRegions(memory_layout);
+
+        // Determine the amount of space needed for the misc region.
+        size_t misc_region_needed_size;
+        {
+            // Each core has a one page stack for all three stack types (Main, Idle, Exception).
+            misc_region_needed_size = Core::Hardware::NUM_CPU_CORES * (3 * (PageSize + PageSize));
+
+            // Account for each auto-map device.
+            for (const auto& region : memory_layout.GetPhysicalMemoryRegionTree()) {
+                if (region.HasTypeAttribute(KMemoryRegionAttr_ShouldKernelMap)) {
+                    // Check that the region is valid.
+                    ASSERT(region.GetEndAddress() != 0);
+
+                    // Account for the region.
+                    misc_region_needed_size +=
+                        PageSize + (Common::AlignUp(region.GetLastAddress(), PageSize) -
+                                    Common::AlignDown(region.GetAddress(), PageSize));
+                }
+            }
+
+            // Multiply the needed size by three, to account for the need for guard space.
+            misc_region_needed_size *= 3;
+        }
+
+        // Decide on the actual size for the misc region.
+        constexpr size_t MiscRegionAlign = KernelAslrAlignment;
+        constexpr size_t MiscRegionMinimumSize = Common::Size_32_MB;
+        const size_t misc_region_size = Common::AlignUp(
+            std::max(misc_region_needed_size, MiscRegionMinimumSize), MiscRegionAlign);
+        ASSERT(misc_region_size > 0);
+
+        // Setup the misc region.
+        const VAddr misc_region_start =
+            memory_layout.GetVirtualMemoryRegionTree().GetRandomAlignedRegion(
+                misc_region_size, MiscRegionAlign, KMemoryRegionType_Kernel);
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+            misc_region_start, misc_region_size, KMemoryRegionType_KernelMisc));
+
+        // Setup the stack region.
+        constexpr size_t StackRegionSize = Common::Size_14_MB;
+        constexpr size_t StackRegionAlign = KernelAslrAlignment;
+        const VAddr stack_region_start =
+            memory_layout.GetVirtualMemoryRegionTree().GetRandomAlignedRegion(
+                StackRegionSize, StackRegionAlign, KMemoryRegionType_Kernel);
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+            stack_region_start, StackRegionSize, KMemoryRegionType_KernelStack));
+
+        // Determine the size of the resource region.
+        const size_t resource_region_size = memory_layout.GetResourceRegionSizeForInit();
+
+        // Determine the size of the slab region.
+        const size_t slab_region_size =
+            Common::AlignUp(Init::CalculateTotalSlabHeapSize(system.Kernel()), PageSize);
+        ASSERT(slab_region_size <= resource_region_size);
+
+        // Setup the slab region.
+        const PAddr code_start_phys_addr = KernelPhysicalAddressCodeBase;
+        const PAddr code_end_phys_addr = code_start_phys_addr + code_region_size;
+        const PAddr slab_start_phys_addr = code_end_phys_addr;
+        const PAddr slab_end_phys_addr = slab_start_phys_addr + slab_region_size;
+        constexpr size_t SlabRegionAlign = KernelAslrAlignment;
+        const size_t slab_region_needed_size =
+            Common::AlignUp(code_end_phys_addr + slab_region_size, SlabRegionAlign) -
+            Common::AlignDown(code_end_phys_addr, SlabRegionAlign);
+        const VAddr slab_region_start =
+            memory_layout.GetVirtualMemoryRegionTree().GetRandomAlignedRegion(
+                slab_region_needed_size, SlabRegionAlign, KMemoryRegionType_Kernel) +
+            (code_end_phys_addr % SlabRegionAlign);
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+            slab_region_start, slab_region_size, KMemoryRegionType_KernelSlab));
+
+        // Setup the temp region.
+        constexpr size_t TempRegionSize = Common::Size_128_MB;
+        constexpr size_t TempRegionAlign = KernelAslrAlignment;
+        const VAddr temp_region_start =
+            memory_layout.GetVirtualMemoryRegionTree().GetRandomAlignedRegion(
+                TempRegionSize, TempRegionAlign, KMemoryRegionType_Kernel);
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(temp_region_start, TempRegionSize,
+                                                                 KMemoryRegionType_KernelTemp));
+
+        // Automatically map in devices that have auto-map attributes.
+        for (auto& region : memory_layout.GetPhysicalMemoryRegionTree()) {
+            // We only care about kernel regions.
+            if (!region.IsDerivedFrom(KMemoryRegionType_Kernel)) {
+                continue;
+            }
+
+            // Check whether we should map the region.
+            if (!region.HasTypeAttribute(KMemoryRegionAttr_ShouldKernelMap)) {
+                continue;
+            }
+
+            // If this region has already been mapped, no need to consider it.
+            if (region.HasTypeAttribute(KMemoryRegionAttr_DidKernelMap)) {
+                continue;
+            }
+
+            // Check that the region is valid.
+            ASSERT(region.GetEndAddress() != 0);
+
+            // Set the attribute to note we've mapped this region.
+            region.SetTypeAttribute(KMemoryRegionAttr_DidKernelMap);
+
+            // Create a virtual pair region and insert it into the tree.
+            const PAddr map_phys_addr = Common::AlignDown(region.GetAddress(), PageSize);
+            const size_t map_size =
+                Common::AlignUp(region.GetEndAddress(), PageSize) - map_phys_addr;
+            const VAddr map_virt_addr =
+                memory_layout.GetVirtualMemoryRegionTree().GetRandomAlignedRegionWithGuard(
+                    map_size, PageSize, KMemoryRegionType_KernelMisc, PageSize);
+            ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+                map_virt_addr, map_size, KMemoryRegionType_KernelMiscMappedDevice));
+            region.SetPairAddress(map_virt_addr + region.GetAddress() - map_phys_addr);
+        }
+
+        Init::SetupDramPhysicalMemoryRegions(memory_layout);
+
+        // Insert a physical region for the kernel code region.
+        ASSERT(memory_layout.GetPhysicalMemoryRegionTree().Insert(
+            code_start_phys_addr, code_region_size, KMemoryRegionType_DramKernelCode));
+
+        // Insert a physical region for the kernel slab region.
+        ASSERT(memory_layout.GetPhysicalMemoryRegionTree().Insert(
+            slab_start_phys_addr, slab_region_size, KMemoryRegionType_DramKernelSlab));
+
+        // Determine size available for kernel page table heaps, requiring > 8 MB.
+        const PAddr resource_end_phys_addr = slab_start_phys_addr + resource_region_size;
+        const size_t page_table_heap_size = resource_end_phys_addr - slab_end_phys_addr;
+        ASSERT(page_table_heap_size / Common::Size_4_MB > 2);
+
+        // Insert a physical region for the kernel page table heap region
+        ASSERT(memory_layout.GetPhysicalMemoryRegionTree().Insert(
+            slab_end_phys_addr, page_table_heap_size, KMemoryRegionType_DramKernelPtHeap));
+
+        // All DRAM regions that we haven't tagged by this point will be mapped under the linear
+        // mapping. Tag them.
+        for (auto& region : memory_layout.GetPhysicalMemoryRegionTree()) {
+            if (region.GetType() == KMemoryRegionType_Dram) {
+                // Check that the region is valid.
+                ASSERT(region.GetEndAddress() != 0);
+
+                // Set the linear map attribute.
+                region.SetTypeAttribute(KMemoryRegionAttr_LinearMapped);
+            }
+        }
+
+        // Get the linear region extents.
+        const auto linear_extents =
+            memory_layout.GetPhysicalMemoryRegionTree().GetDerivedRegionExtents(
+                KMemoryRegionAttr_LinearMapped);
+        ASSERT(linear_extents.GetEndAddress() != 0);
+
+        // Setup the linear mapping region.
+        constexpr size_t LinearRegionAlign = Common::Size_1_GB;
+        const PAddr aligned_linear_phys_start =
+            Common::AlignDown(linear_extents.GetAddress(), LinearRegionAlign);
+        const size_t linear_region_size =
+            Common::AlignUp(linear_extents.GetEndAddress(), LinearRegionAlign) -
+            aligned_linear_phys_start;
+        const VAddr linear_region_start =
+            memory_layout.GetVirtualMemoryRegionTree().GetRandomAlignedRegionWithGuard(
+                linear_region_size, LinearRegionAlign, KMemoryRegionType_None, LinearRegionAlign);
+
+        const u64 linear_region_phys_to_virt_diff = linear_region_start - aligned_linear_phys_start;
+
+        // Map and create regions for all the linearly-mapped data.
+        {
+            PAddr cur_phys_addr = 0;
+            u64 cur_size = 0;
+            for (auto& region : memory_layout.GetPhysicalMemoryRegionTree()) {
+                if (!region.HasTypeAttribute(KMemoryRegionAttr_LinearMapped)) {
+                    continue;
+                }
+
+                ASSERT(region.GetEndAddress() != 0);
+
+                if (cur_size == 0) {
+                    cur_phys_addr = region.GetAddress();
+                    cur_size = region.GetSize();
+                } else if (cur_phys_addr + cur_size == region.GetAddress()) {
+                    cur_size += region.GetSize();
+                } else {
+                    cur_phys_addr = region.GetAddress();
+                    cur_size = region.GetSize();
+                }
+
+                const VAddr region_virt_addr =
+                    region.GetAddress() + linear_region_phys_to_virt_diff;
+                ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+                    region_virt_addr, region.GetSize(),
+                    GetTypeForVirtualLinearMapping(region.GetType())));
+                region.SetPairAddress(region_virt_addr);
+
+                KMemoryRegion* virt_region =
+                    memory_layout.GetVirtualMemoryRegionTree().FindModifiable(region_virt_addr);
+                ASSERT(virt_region != nullptr);
+                virt_region->SetPairAddress(region.GetAddress());
+            }
+        }
+
+        // Insert regions for the initial page table region.
+        ASSERT(memory_layout.GetPhysicalMemoryRegionTree().Insert(
+            resource_end_phys_addr, KernelPageTableHeapSize, KMemoryRegionType_DramKernelInitPt));
+        ASSERT(memory_layout.GetVirtualMemoryRegionTree().Insert(
+            resource_end_phys_addr + linear_region_phys_to_virt_diff, KernelPageTableHeapSize,
+            KMemoryRegionType_VirtualDramKernelInitPt));
+
+        // All linear-mapped DRAM regions that we haven't tagged by this point will be allocated to
+        // some pool partition. Tag them.
+        for (auto& region : memory_layout.GetPhysicalMemoryRegionTree()) {
+            if (region.GetType() == (KMemoryRegionType_Dram | KMemoryRegionAttr_LinearMapped)) {
+                region.SetType(KMemoryRegionType_DramPoolPartition);
+            }
+        }
+
+        // Setup all other memory regions needed to arrange the pool partitions.
+        Init::SetupPoolPartitionMemoryRegions(memory_layout);
+
+        // Cache all linear regions in their own trees for faster access, later.
+        memory_layout.InitializeLinearMemoryRegionTrees(aligned_linear_phys_start,
+                                                        linear_region_start);
+    }
+
+    void InitializeMemoryLayout(const KMemoryLayout& memory_layout) {
+        const auto system_pool = memory_layout.GetKernelSystemPoolRegionPhysicalExtents();
+        const auto applet_pool = memory_layout.GetKernelAppletPoolRegionPhysicalExtents();
+        const auto application_pool = memory_layout.GetKernelApplicationPoolRegionPhysicalExtents();
+
+        // Initialize memory managers
+        memory_manager = std::make_unique<KMemoryManager>();
+        memory_manager->InitializeManager(KMemoryManager::Pool::Application,
+                                          application_pool.GetAddress(),
+                                          application_pool.GetEndAddress());
+        memory_manager->InitializeManager(KMemoryManager::Pool::Applet, applet_pool.GetAddress(),
+                                          applet_pool.GetEndAddress());
+        memory_manager->InitializeManager(KMemoryManager::Pool::System, system_pool.GetAddress(),
+                                          system_pool.GetEndAddress());
+
+        // Setup memory regions for emulated processes
+        // TODO(bunnei): These should not be hardcoded regions initialized within the kernel
         constexpr std::size_t hid_size{0x40000};
         constexpr std::size_t font_size{0x1100000};
         constexpr std::size_t irs_size{0x8000};
         constexpr std::size_t time_size{0x1000};
-        constexpr PAddr hid_addr{layout.System().StartAddress()};
-        constexpr PAddr font_pa{layout.System().StartAddress() + hid_size};
-        constexpr PAddr irs_addr{layout.System().StartAddress() + hid_size + font_size};
-        constexpr PAddr time_addr{layout.System().StartAddress() + hid_size + font_size + irs_size};
 
-        // Initialize memory manager
-        memory_manager = std::make_unique<Memory::MemoryManager>();
-        memory_manager->InitializeManager(Memory::MemoryManager::Pool::Application,
-                                          layout.Application().StartAddress(),
-                                          layout.Application().EndAddress());
-        memory_manager->InitializeManager(Memory::MemoryManager::Pool::Applet,
-                                          layout.Applet().StartAddress(),
-                                          layout.Applet().EndAddress());
-        memory_manager->InitializeManager(Memory::MemoryManager::Pool::System,
-                                          layout.System().StartAddress(),
-                                          layout.System().EndAddress());
+        const PAddr hid_phys_addr{system_pool.GetAddress()};
+        const PAddr font_phys_addr{system_pool.GetAddress() + hid_size};
+        const PAddr irs_phys_addr{system_pool.GetAddress() + hid_size + font_size};
+        const PAddr time_phys_addr{system_pool.GetAddress() + hid_size + font_size + irs_size};
 
-        hid_shared_mem = Kernel::SharedMemory::Create(
-            system.Kernel(), system.DeviceMemory(), nullptr,
-            {hid_addr, hid_size / Memory::PageSize}, Memory::MemoryPermission::None,
-            Memory::MemoryPermission::Read, hid_addr, hid_size, "HID:SharedMemory");
-        font_shared_mem = Kernel::SharedMemory::Create(
-            system.Kernel(), system.DeviceMemory(), nullptr,
-            {font_pa, font_size / Memory::PageSize}, Memory::MemoryPermission::None,
-            Memory::MemoryPermission::Read, font_pa, font_size, "Font:SharedMemory");
-        irs_shared_mem = Kernel::SharedMemory::Create(
-            system.Kernel(), system.DeviceMemory(), nullptr,
-            {irs_addr, irs_size / Memory::PageSize}, Memory::MemoryPermission::None,
-            Memory::MemoryPermission::Read, irs_addr, irs_size, "IRS:SharedMemory");
-        time_shared_mem = Kernel::SharedMemory::Create(
-            system.Kernel(), system.DeviceMemory(), nullptr,
-            {time_addr, time_size / Memory::PageSize}, Memory::MemoryPermission::None,
-            Memory::MemoryPermission::Read, time_addr, time_size, "Time:SharedMemory");
+        hid_shared_mem = KSharedMemory::Create(system.Kernel());
+        font_shared_mem = KSharedMemory::Create(system.Kernel());
+        irs_shared_mem = KSharedMemory::Create(system.Kernel());
+        time_shared_mem = KSharedMemory::Create(system.Kernel());
 
+        hid_shared_mem->Initialize(system.DeviceMemory(), nullptr,
+                                   {hid_phys_addr, hid_size / PageSize},
+                                   Svc::MemoryPermission::None, Svc::MemoryPermission::Read,
+                                   hid_phys_addr, hid_size, "HID:SharedMemory");
+        font_shared_mem->Initialize(system.DeviceMemory(), nullptr,
+                                    {font_phys_addr, font_size / PageSize},
+                                    Svc::MemoryPermission::None, Svc::MemoryPermission::Read,
+                                    font_phys_addr, font_size, "Font:SharedMemory");
+        irs_shared_mem->Initialize(system.DeviceMemory(), nullptr,
+                                   {irs_phys_addr, irs_size / PageSize},
+                                   Svc::MemoryPermission::None, Svc::MemoryPermission::Read,
+                                   irs_phys_addr, irs_size, "IRS:SharedMemory");
+        time_shared_mem->Initialize(system.DeviceMemory(), nullptr,
+                                    {time_phys_addr, time_size / PageSize},
+                                    Svc::MemoryPermission::None, Svc::MemoryPermission::Read,
+                                    time_phys_addr, time_size, "Time:SharedMemory");
+    }
+
+    void InitializePageSlab() {
         // Allocate slab heaps
-        user_slab_heap_pages = std::make_unique<Memory::SlabHeap<Memory::Page>>();
+        user_slab_heap_pages =
+            std::make_unique<KSlabHeap<Page>>(KSlabHeap<Page>::AllocationType::Guest);
 
-        // Initialize slab heaps
+        // TODO(ameerj): This should be derived, not hardcoded within the kernel
         constexpr u64 user_slab_heap_size{0x3de000};
+        // Reserve slab heaps
+        ASSERT(
+            system_resource_limit->Reserve(LimitableResource::PhysicalMemory, user_slab_heap_size));
+        // Initialize slab heap
         user_slab_heap_pages->Initialize(
             system.DeviceMemory().GetPointer(Core::DramMemoryMap::SlabHeapBase),
             user_slab_heap_size);
     }
 
     std::atomic<u32> next_object_id{0};
-    std::atomic<u64> next_kernel_process_id{Process::InitialKIPIDMin};
-    std::atomic<u64> next_user_process_id{Process::ProcessIDMin};
+    std::atomic<u64> next_kernel_process_id{KProcess::InitialKIPIDMin};
+    std::atomic<u64> next_user_process_id{KProcess::ProcessIDMin};
     std::atomic<u64> next_thread_id{1};
 
     // Lists all processes that exist in the current session.
-    std::vector<std::shared_ptr<Process>> process_list;
-    Process* current_process = nullptr;
+    std::vector<KProcess*> process_list;
+    KProcess* current_process{};
     std::unique_ptr<Kernel::GlobalSchedulerContext> global_scheduler_context;
-    Kernel::Synchronization synchronization;
     Kernel::TimeManager time_manager;
 
-    std::shared_ptr<ResourceLimit> system_resource_limit;
+    Init::KSlabResourceCounts slab_resource_counts{};
+    KResourceLimit* system_resource_limit{};
 
     std::shared_ptr<Core::Timing::EventType> preemption_event;
 
     // This is the kernel's handle table or supervisor handle table which
     // stores all the objects in place.
-    HandleTable global_handle_table;
+    std::unique_ptr<KHandleTable> global_handle_table;
+
+    KAutoObjectWithListContainer object_list_container;
 
     /// Map of named ports managed by the kernel, which can be retrieved using
     /// the ConnectToPort SVC.
+    std::unordered_map<std::string, ServiceInterfaceFactory> service_interface_factory;
     NamedPortTable named_ports;
 
     std::unique_ptr<Core::ExclusiveMonitor> exclusive_monitor;
@@ -329,14 +668,14 @@ struct KernelCore::Impl {
     std::atomic<u32> next_host_thread_id{Core::Hardware::NUM_CPU_CORES};
 
     // Kernel memory management
-    std::unique_ptr<Memory::MemoryManager> memory_manager;
-    std::unique_ptr<Memory::SlabHeap<Memory::Page>> user_slab_heap_pages;
+    std::unique_ptr<KMemoryManager> memory_manager;
+    std::unique_ptr<KSlabHeap<Page>> user_slab_heap_pages;
 
     // Shared memory for services
-    std::shared_ptr<Kernel::SharedMemory> hid_shared_mem;
-    std::shared_ptr<Kernel::SharedMemory> font_shared_mem;
-    std::shared_ptr<Kernel::SharedMemory> irs_shared_mem;
-    std::shared_ptr<Kernel::SharedMemory> time_shared_mem;
+    Kernel::KSharedMemory* hid_shared_mem{};
+    Kernel::KSharedMemory* font_shared_mem{};
+    Kernel::KSharedMemory* irs_shared_mem{};
+    Kernel::KSharedMemory* time_shared_mem{};
 
     // Threads used for services
     std::unordered_set<std::shared_ptr<Kernel::ServiceThread>> service_threads;
@@ -345,11 +684,12 @@ struct KernelCore::Impl {
     // the release of itself
     std::unique_ptr<Common::ThreadWorker> service_thread_manager;
 
-    std::array<std::shared_ptr<Thread>, Core::Hardware::NUM_CPU_CORES> suspend_threads{};
+    std::array<KThread*, Core::Hardware::NUM_CPU_CORES> suspend_threads;
     std::array<Core::CPUInterruptHandler, Core::Hardware::NUM_CPU_CORES> interrupts{};
     std::array<std::unique_ptr<Kernel::KScheduler>, Core::Hardware::NUM_CPU_CORES> schedulers{};
 
     bool is_multicore{};
+    bool is_phantom_mode_for_singlecore{};
     u32 single_core_thread_id{};
 
     std::array<u64, Core::Hardware::NUM_CPU_CORES> svc_ticks{};
@@ -359,15 +699,14 @@ struct KernelCore::Impl {
 };
 
 KernelCore::KernelCore(Core::System& system) : impl{std::make_unique<Impl>(system, *this)} {}
-KernelCore::~KernelCore() {
-    Shutdown();
-}
+KernelCore::~KernelCore() = default;
 
 void KernelCore::SetMulticore(bool is_multicore) {
     impl->SetMulticore(is_multicore);
 }
 
 void KernelCore::Initialize() {
+    slab_heap_container = std::make_unique<SlabHeapContainer>();
     impl->Initialize(*this);
 }
 
@@ -379,31 +718,35 @@ void KernelCore::Shutdown() {
     impl->Shutdown();
 }
 
-std::shared_ptr<ResourceLimit> KernelCore::GetSystemResourceLimit() const {
+const KResourceLimit* KernelCore::GetSystemResourceLimit() const {
     return impl->system_resource_limit;
 }
 
-std::shared_ptr<Thread> KernelCore::RetrieveThreadFromGlobalHandleTable(Handle handle) const {
-    return impl->global_handle_table.Get<Thread>(handle);
+KResourceLimit* KernelCore::GetSystemResourceLimit() {
+    return impl->system_resource_limit;
 }
 
-void KernelCore::AppendNewProcess(std::shared_ptr<Process> process) {
-    impl->process_list.push_back(std::move(process));
+KScopedAutoObject<KThread> KernelCore::RetrieveThreadFromGlobalHandleTable(Handle handle) const {
+    return impl->global_handle_table->GetObject<KThread>(handle);
 }
 
-void KernelCore::MakeCurrentProcess(Process* process) {
+void KernelCore::AppendNewProcess(KProcess* process) {
+    impl->process_list.push_back(process);
+}
+
+void KernelCore::MakeCurrentProcess(KProcess* process) {
     impl->MakeCurrentProcess(process);
 }
 
-Process* KernelCore::CurrentProcess() {
+KProcess* KernelCore::CurrentProcess() {
     return impl->current_process;
 }
 
-const Process* KernelCore::CurrentProcess() const {
+const KProcess* KernelCore::CurrentProcess() const {
     return impl->current_process;
 }
 
-const std::vector<std::shared_ptr<Process>>& KernelCore::GetProcessList() const {
+const std::vector<KProcess*>& KernelCore::GetProcessList() const {
     return impl->process_list;
 }
 
@@ -461,14 +804,6 @@ const std::array<Core::CPUInterruptHandler, Core::Hardware::NUM_CPU_CORES>& Kern
     return impl->interrupts;
 }
 
-Kernel::Synchronization& KernelCore::Synchronization() {
-    return impl->synchronization;
-}
-
-const Kernel::Synchronization& KernelCore::Synchronization() const {
-    return impl->synchronization;
-}
-
 Kernel::TimeManager& KernelCore::TimeManager() {
     return impl->time_manager;
 }
@@ -483,6 +818,14 @@ Core::ExclusiveMonitor& KernelCore::GetExclusiveMonitor() {
 
 const Core::ExclusiveMonitor& KernelCore::GetExclusiveMonitor() const {
     return *impl->exclusive_monitor;
+}
+
+KAutoObjectWithListContainer& KernelCore::ObjectListContainer() {
+    return impl->object_list_container;
+}
+
+const KAutoObjectWithListContainer& KernelCore::ObjectListContainer() const {
+    return impl->object_list_container;
 }
 
 void KernelCore::InvalidateAllInstructionCaches() {
@@ -504,17 +847,17 @@ void KernelCore::PrepareReschedule(std::size_t id) {
     // TODO: Reimplement, this
 }
 
-void KernelCore::AddNamedPort(std::string name, std::shared_ptr<ClientPort> port) {
-    impl->named_ports.emplace(std::move(name), std::move(port));
+void KernelCore::RegisterNamedService(std::string name, ServiceInterfaceFactory&& factory) {
+    impl->service_interface_factory.emplace(std::move(name), factory);
 }
 
-KernelCore::NamedPortTable::iterator KernelCore::FindNamedPort(const std::string& name) {
-    return impl->named_ports.find(name);
-}
-
-KernelCore::NamedPortTable::const_iterator KernelCore::FindNamedPort(
-    const std::string& name) const {
-    return impl->named_ports.find(name);
+KClientPort* KernelCore::CreateNamedServicePort(std::string name) {
+    auto search = impl->service_interface_factory.find(name);
+    if (search == impl->service_interface_factory.end()) {
+        UNIMPLEMENTED();
+        return {};
+    }
+    return &search->second(impl->system.ServiceManager(), impl->system);
 }
 
 bool KernelCore::IsValidNamedPort(NamedPortTable::const_iterator port) const {
@@ -537,12 +880,12 @@ u64 KernelCore::CreateNewUserProcessID() {
     return impl->next_user_process_id++;
 }
 
-Kernel::HandleTable& KernelCore::GlobalHandleTable() {
-    return impl->global_handle_table;
+KHandleTable& KernelCore::GlobalHandleTable() {
+    return *impl->global_handle_table;
 }
 
-const Kernel::HandleTable& KernelCore::GlobalHandleTable() const {
-    return impl->global_handle_table;
+const KHandleTable& KernelCore::GlobalHandleTable() const {
+    return *impl->global_handle_table;
 }
 
 void KernelCore::RegisterCoreThread(std::size_t core_id) {
@@ -557,55 +900,55 @@ u32 KernelCore::GetCurrentHostThreadID() const {
     return impl->GetCurrentHostThreadID();
 }
 
-Core::EmuThreadHandle KernelCore::GetCurrentEmuThreadID() const {
-    return impl->GetCurrentEmuThreadID();
+KThread* KernelCore::GetCurrentEmuThread() const {
+    return impl->GetCurrentEmuThread();
 }
 
-Memory::MemoryManager& KernelCore::MemoryManager() {
+KMemoryManager& KernelCore::MemoryManager() {
     return *impl->memory_manager;
 }
 
-const Memory::MemoryManager& KernelCore::MemoryManager() const {
+const KMemoryManager& KernelCore::MemoryManager() const {
     return *impl->memory_manager;
 }
 
-Memory::SlabHeap<Memory::Page>& KernelCore::GetUserSlabHeapPages() {
+KSlabHeap<Page>& KernelCore::GetUserSlabHeapPages() {
     return *impl->user_slab_heap_pages;
 }
 
-const Memory::SlabHeap<Memory::Page>& KernelCore::GetUserSlabHeapPages() const {
+const KSlabHeap<Page>& KernelCore::GetUserSlabHeapPages() const {
     return *impl->user_slab_heap_pages;
 }
 
-Kernel::SharedMemory& KernelCore::GetHidSharedMem() {
+Kernel::KSharedMemory& KernelCore::GetHidSharedMem() {
     return *impl->hid_shared_mem;
 }
 
-const Kernel::SharedMemory& KernelCore::GetHidSharedMem() const {
+const Kernel::KSharedMemory& KernelCore::GetHidSharedMem() const {
     return *impl->hid_shared_mem;
 }
 
-Kernel::SharedMemory& KernelCore::GetFontSharedMem() {
+Kernel::KSharedMemory& KernelCore::GetFontSharedMem() {
     return *impl->font_shared_mem;
 }
 
-const Kernel::SharedMemory& KernelCore::GetFontSharedMem() const {
+const Kernel::KSharedMemory& KernelCore::GetFontSharedMem() const {
     return *impl->font_shared_mem;
 }
 
-Kernel::SharedMemory& KernelCore::GetIrsSharedMem() {
+Kernel::KSharedMemory& KernelCore::GetIrsSharedMem() {
     return *impl->irs_shared_mem;
 }
 
-const Kernel::SharedMemory& KernelCore::GetIrsSharedMem() const {
+const Kernel::KSharedMemory& KernelCore::GetIrsSharedMem() const {
     return *impl->irs_shared_mem;
 }
 
-Kernel::SharedMemory& KernelCore::GetTimeSharedMem() {
+Kernel::KSharedMemory& KernelCore::GetTimeSharedMem() {
     return *impl->time_shared_mem;
 }
 
-const Kernel::SharedMemory& KernelCore::GetTimeSharedMem() const {
+const Kernel::KSharedMemory& KernelCore::GetTimeSharedMem() const {
     return *impl->time_shared_mem;
 }
 
@@ -613,9 +956,11 @@ void KernelCore::Suspend(bool in_suspention) {
     const bool should_suspend = exception_exited || in_suspention;
     {
         KScopedSchedulerLock lock(*this);
-        ThreadStatus status = should_suspend ? ThreadStatus::Ready : ThreadStatus::WaitSleep;
-        for (std::size_t i = 0; i < Core::Hardware::NUM_CPU_CORES; i++) {
-            impl->suspend_threads[i]->SetStatus(status);
+        const auto state = should_suspend ? ThreadState::Runnable : ThreadState::Waiting;
+        for (u32 core_id = 0; core_id < Core::Hardware::NUM_CPU_CORES; core_id++) {
+            impl->suspend_threads[core_id]->SetState(state);
+            impl->suspend_threads[core_id]->SetWaitReasonForDebugging(
+                ThreadWaitReasonForDebugging::Suspended);
         }
     }
 }
@@ -652,6 +997,30 @@ void KernelCore::ReleaseServiceThread(std::weak_ptr<Kernel::ServiceThread> servi
             impl->service_threads.erase(strong_ptr);
         }
     });
+}
+
+Init::KSlabResourceCounts& KernelCore::SlabResourceCounts() {
+    return impl->slab_resource_counts;
+}
+
+const Init::KSlabResourceCounts& KernelCore::SlabResourceCounts() const {
+    return impl->slab_resource_counts;
+}
+
+bool KernelCore::IsPhantomModeForSingleCore() const {
+    return impl->IsPhantomModeForSingleCore();
+}
+
+void KernelCore::SetIsPhantomModeForSingleCore(bool value) {
+    impl->SetIsPhantomModeForSingleCore(value);
+}
+
+Core::System& KernelCore::System() {
+    return impl->system;
+}
+
+const Core::System& KernelCore::System() const {
+    return impl->system;
 }
 
 } // namespace Kernel

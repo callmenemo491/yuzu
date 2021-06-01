@@ -7,11 +7,11 @@
 #include <ostream>
 #include <string>
 #include "common/concepts.h"
-#include "common/file_util.h"
+#include "common/fs/path_util.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
 #include "core/core.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/loader/deconstructed_rom_directory.h"
 #include "core/loader/elf.h"
 #include "core/loader/kip.h"
@@ -185,12 +185,16 @@ constexpr std::array<const char*, 66> RESULT_MESSAGES{
     "The INI file contains more than the maximum allowable number of KIP files.",
 };
 
+std::string GetResultStatusString(ResultStatus status) {
+    return RESULT_MESSAGES.at(static_cast<std::size_t>(status));
+}
+
 std::ostream& operator<<(std::ostream& os, ResultStatus status) {
     os << RESULT_MESSAGES.at(static_cast<std::size_t>(status));
     return os;
 }
 
-AppLoader::AppLoader(FileSys::VirtualFile file) : file(std::move(file)) {}
+AppLoader::AppLoader(FileSys::VirtualFile file_) : file(std::move(file_)) {}
 AppLoader::~AppLoader() = default;
 
 /**

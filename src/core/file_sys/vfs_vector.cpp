@@ -7,8 +7,8 @@
 #include "core/file_sys/vfs_vector.h"
 
 namespace FileSys {
-VectorVfsFile::VectorVfsFile(std::vector<u8> initial_data, std::string name, VirtualDir parent)
-    : data(std::move(initial_data)), parent(std::move(parent)), name(std::move(name)) {}
+VectorVfsFile::VectorVfsFile(std::vector<u8> initial_data, std::string name_, VirtualDir parent_)
+    : data(std::move(initial_data)), parent(std::move(parent_)), name(std::move(name_)) {}
 
 VectorVfsFile::~VectorVfsFile() = default;
 
@@ -103,12 +103,12 @@ static bool FindAndRemoveVectorElement(std::vector<T>& vec, std::string_view nam
     return true;
 }
 
-bool VectorVfsDirectory::DeleteSubdirectory(std::string_view name) {
-    return FindAndRemoveVectorElement(dirs, name);
+bool VectorVfsDirectory::DeleteSubdirectory(std::string_view subdir_name) {
+    return FindAndRemoveVectorElement(dirs, subdir_name);
 }
 
-bool VectorVfsDirectory::DeleteFile(std::string_view name) {
-    return FindAndRemoveVectorElement(files, name);
+bool VectorVfsDirectory::DeleteFile(std::string_view file_name) {
+    return FindAndRemoveVectorElement(files, file_name);
 }
 
 bool VectorVfsDirectory::Rename(std::string_view name_) {
@@ -116,11 +116,11 @@ bool VectorVfsDirectory::Rename(std::string_view name_) {
     return true;
 }
 
-VirtualDir VectorVfsDirectory::CreateSubdirectory(std::string_view name) {
+VirtualDir VectorVfsDirectory::CreateSubdirectory(std::string_view subdir_name) {
     return nullptr;
 }
 
-VirtualFile VectorVfsDirectory::CreateFile(std::string_view name) {
+VirtualFile VectorVfsDirectory::CreateFile(std::string_view file_name) {
     return nullptr;
 }
 

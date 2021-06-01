@@ -24,10 +24,10 @@
 #define INSERT_PADDING_WORDS(num_words)                                                            \
     std::array<u32, num_words> CONCAT2(pad, __LINE__) {}
 
-/// These are similar to the INSERT_PADDING_* macros, but are needed for padding unions. This is
-/// because unions can only be initialized by one member.
-#define INSERT_UNION_PADDING_BYTES(num_bytes) std::array<u8, num_bytes> CONCAT2(pad, __LINE__)
-#define INSERT_UNION_PADDING_WORDS(num_words) std::array<u32, num_words> CONCAT2(pad, __LINE__)
+/// These are similar to the INSERT_PADDING_* macros but do not zero-initialize the contents.
+/// This keeps the structure trivial to construct.
+#define INSERT_PADDING_BYTES_NOINIT(num_bytes) std::array<u8, num_bytes> CONCAT2(pad, __LINE__)
+#define INSERT_PADDING_WORDS_NOINIT(num_words) std::array<u32, num_words> CONCAT2(pad, __LINE__)
 
 #ifndef _MSC_VER
 
@@ -52,8 +52,12 @@ __declspec(dllimport) void __stdcall DebugBreak(void);
 // Generic function to get last error message.
 // Call directly after the command or use the error num.
 // This function might change the error code.
-// Defined in Misc.cpp.
+// Defined in misc.cpp.
 [[nodiscard]] std::string GetLastErrorMsg();
+
+// Like GetLastErrorMsg(), but passing an explicit error code.
+// Defined in misc.cpp.
+[[nodiscard]] std::string NativeErrorToString(int e);
 
 #define DECLARE_ENUM_FLAG_OPERATORS(type)                                                          \
     [[nodiscard]] constexpr type operator|(type a, type b) noexcept {                              \
@@ -93,10 +97,58 @@ __declspec(dllimport) void __stdcall DebugBreak(void);
         return static_cast<T>(key) == 0;                                                           \
     }
 
+/// Evaluates a boolean expression, and returns a result unless that expression is true.
+#define R_UNLESS(expr, res)                                                                        \
+    {                                                                                              \
+        if (!(expr)) {                                                                             \
+            if (res.IsError()) {                                                                   \
+                LOG_ERROR(Kernel, "Failed with result: {}", res.raw);                              \
+            }                                                                                      \
+            return res;                                                                            \
+        }                                                                                          \
+    }
+
+#define YUZU_NON_COPYABLE(cls)                                                                     \
+    cls(const cls&) = delete;                                                                      \
+    cls& operator=(const cls&) = delete
+
+#define YUZU_NON_MOVEABLE(cls)                                                                     \
+    cls(cls&&) = delete;                                                                           \
+    cls& operator=(cls&&) = delete
+
+#define R_SUCCEEDED(res) (res.IsSuccess())
+
+/// Evaluates an expression that returns a result, and returns the result if it would fail.
+#define R_TRY(res_expr)                                                                            \
+    {                                                                                              \
+        const auto _tmp_r_try_rc = (res_expr);                                                     \
+        if (_tmp_r_try_rc.IsError()) {                                                             \
+            return _tmp_r_try_rc;                                                                  \
+        }                                                                                          \
+    }
+
+/// Evaluates a boolean expression, and succeeds if that expression is true.
+#define R_SUCCEED_IF(expr) R_UNLESS(!(expr), RESULT_SUCCESS)
+
 namespace Common {
 
 [[nodiscard]] constexpr u32 MakeMagic(char a, char b, char c, char d) {
     return u32(a) | u32(b) << 8 | u32(c) << 16 | u32(d) << 24;
+}
+
+// std::size() does not support zero-size C arrays. We're fixing that.
+template <class C>
+constexpr auto Size(const C& c) -> decltype(c.size()) {
+    return std::size(c);
+}
+
+template <class C>
+constexpr std::size_t Size(const C& c) {
+    if constexpr (sizeof(C) == 0) {
+        return 0;
+    } else {
+        return std::size(c);
+    }
 }
 
 } // namespace Common

@@ -6,19 +6,16 @@
 
 #include "common/common_types.h"
 #include "common/uuid.h"
-#include "core/hle/kernel/shared_memory.h"
-#include "core/hle/kernel/thread.h"
+#include "core/hle/kernel/k_shared_memory.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/time/clock_types.h"
 
 namespace Service::Time {
 
 class SharedMemory final {
 public:
-    explicit SharedMemory(Core::System& system);
+    explicit SharedMemory(Core::System& system_);
     ~SharedMemory();
-
-    // Return the shared memory handle
-    std::shared_ptr<Kernel::SharedMemory> GetSharedMemoryHolder() const;
 
     // TODO(ogniK): We have to properly simulate memory barriers, how are we going to do this?
     template <typename T, std::size_t Offset>
@@ -56,14 +53,13 @@ public:
     };
     static_assert(sizeof(Format) == 0xd8, "Format is an invalid size");
 
-    void SetupStandardSteadyClock(Core::System& system, const Common::UUID& clock_source_id,
-                                  Clock::TimeSpanType currentTimePoint);
+    void SetupStandardSteadyClock(const Common::UUID& clock_source_id,
+                                  Clock::TimeSpanType current_time_point);
     void UpdateLocalSystemClockContext(const Clock::SystemClockContext& context);
     void UpdateNetworkSystemClockContext(const Clock::SystemClockContext& context);
     void SetAutomaticCorrectionEnabled(bool is_enabled);
 
 private:
-    std::shared_ptr<Kernel::SharedMemory> shared_memory_holder;
     Core::System& system;
     Format shared_memory_format{};
 };

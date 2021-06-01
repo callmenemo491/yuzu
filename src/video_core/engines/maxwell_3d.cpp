@@ -30,8 +30,8 @@ Maxwell3D::Maxwell3D(Core::System& system_, MemoryManager& memory_manager_)
 
 Maxwell3D::~Maxwell3D() = default;
 
-void Maxwell3D::BindRasterizer(VideoCore::RasterizerInterface& rasterizer_) {
-    rasterizer = &rasterizer_;
+void Maxwell3D::BindRasterizer(VideoCore::RasterizerInterface* rasterizer_) {
+    rasterizer = rasterizer_;
 }
 
 void Maxwell3D::InitializeRegisterDefaults() {
@@ -179,22 +179,22 @@ void Maxwell3D::ProcessMethodCall(u32 method, u32 argument, u32 nonshadow_argume
         return ProcessMacroBind(argument);
     case MAXWELL3D_REG_INDEX(firmware[4]):
         return ProcessFirmwareCall4();
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[0]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[1]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[2]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[3]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[4]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[5]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[6]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[7]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[8]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[9]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[10]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[11]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[12]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[13]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[14]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[15]):
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data):
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 1:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 2:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 3:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 4:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 5:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 6:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 7:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 8:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 9:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 10:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 11:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 12:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 13:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 14:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 15:
         return StartCBData(method);
     case MAXWELL3D_REG_INDEX(cb_bind[0]):
         return ProcessCBBind(0);
@@ -223,7 +223,6 @@ void Maxwell3D::ProcessMethodCall(u32 method, u32 argument, u32 nonshadow_argume
     case MAXWELL3D_REG_INDEX(data_upload):
         upload_state.ProcessData(argument, is_last_call);
         if (is_last_call) {
-            OnMemoryWrite();
         }
         return;
     case MAXWELL3D_REG_INDEX(fragment_barrier):
@@ -287,22 +286,22 @@ void Maxwell3D::CallMultiMethod(u32 method, const u32* base_start, u32 amount,
         return;
     }
     switch (method) {
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[0]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[1]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[2]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[3]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[4]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[5]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[6]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[7]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[8]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[9]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[10]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[11]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[12]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[13]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[14]):
-    case MAXWELL3D_REG_INDEX(const_buffer.cb_data[15]):
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data):
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 1:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 2:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 3:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 4:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 5:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 6:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 7:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 8:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 9:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 10:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 11:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 12:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 13:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 14:
+    case MAXWELL3D_REG_INDEX(const_buffer.cb_data) + 15:
         ProcessCBMultiData(method, base_start, amount);
         break;
     default:
@@ -570,17 +569,18 @@ std::optional<u64> Maxwell3D::GetQueryResult() {
     }
 }
 
-void Maxwell3D::ProcessCBBind(std::size_t stage_index) {
+void Maxwell3D::ProcessCBBind(size_t stage_index) {
     // Bind the buffer currently in CB_ADDRESS to the specified index in the desired shader stage.
-    auto& shader = state.shader_stages[stage_index];
-    auto& bind_data = regs.cb_bind[stage_index];
-
-    ASSERT(bind_data.index < Regs::MaxConstBuffers);
-    auto& buffer = shader.const_buffers[bind_data.index];
-
+    const auto& bind_data = regs.cb_bind[stage_index];
+    auto& buffer = state.shader_stages[stage_index].const_buffers[bind_data.index];
     buffer.enabled = bind_data.valid.Value() != 0;
     buffer.address = regs.const_buffer.BufferAddress();
     buffer.size = regs.const_buffer.cb_size;
+
+    const bool is_enabled = bind_data.valid.Value() != 0;
+    const GPUVAddr gpu_addr = is_enabled ? regs.const_buffer.BufferAddress() : 0;
+    const u32 size = is_enabled ? regs.const_buffer.cb_size : 0;
+    rasterizer->BindGraphicsUniformBuffer(stage_index, bind_data.index, gpu_addr, size);
 }
 
 void Maxwell3D::ProcessCBData(u32 value) {
@@ -592,7 +592,7 @@ void Maxwell3D::ProcessCBData(u32 value) {
 }
 
 void Maxwell3D::StartCBData(u32 method) {
-    constexpr u32 first_cb_data = MAXWELL3D_REG_INDEX(const_buffer.cb_data[0]);
+    constexpr u32 first_cb_data = MAXWELL3D_REG_INDEX(const_buffer.cb_data);
     cb_data_state.start_pos = regs.const_buffer.cb_pos;
     cb_data_state.id = method - first_cb_data;
     cb_data_state.current = method;
@@ -605,7 +605,7 @@ void Maxwell3D::ProcessCBMultiData(u32 method, const u32* start_base, u32 amount
         if (cb_data_state.current != null_cb_data) {
             FinishCBData();
         }
-        constexpr u32 first_cb_data = MAXWELL3D_REG_INDEX(const_buffer.cb_data[0]);
+        constexpr u32 first_cb_data = MAXWELL3D_REG_INDEX(const_buffer.cb_data);
         cb_data_state.start_pos = regs.const_buffer.cb_pos;
         cb_data_state.id = method - first_cb_data;
         cb_data_state.current = method;
@@ -635,7 +635,6 @@ void Maxwell3D::FinishCBData() {
 
     const u32 id = cb_data_state.id;
     memory_manager.WriteBlock(address, cb_data_state.buffer[id].data(), size);
-    OnMemoryWrite();
 
     cb_data_state.id = null_cb_data;
     cb_data_state.current = null_cb_data;

@@ -30,11 +30,10 @@ If you want to contribute to the user interface translation, please check out th
 
 * __Windows__: [Windows Build](https://github.com/yuzu-emu/yuzu/wiki/Building-For-Windows)
 * __Linux__: [Linux Build](https://github.com/yuzu-emu/yuzu/wiki/Building-For-Linux)
-* __macOS__: [macOS Build](https://github.com/yuzu-emu/yuzu/wiki/Building-for-macOS)
 
 
 ### Support
-We happily accept monetary donations or donated games and hardware. Please see our [donations page](https://yuzu-emu.org/donate/) for more information on how you can contribute to yuzu. Any donations received will go towards things like:
+We happily accept monetary donations, or donated games and hardware. Please see our [donations page](https://yuzu-emu.org/donate/) for more information on how you can contribute to yuzu. Any donations received will go towards things like:
 * Switch consoles to explore and reverse-engineer the hardware
 * Switch games for testing, reverse-engineering, and implementing new features
 * Web hosting and infrastructure setup

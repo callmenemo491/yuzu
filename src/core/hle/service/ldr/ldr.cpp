@@ -11,10 +11,10 @@
 #include "common/scope_exit.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/errors.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/memory/system_control.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_system_control.h"
+#include "core/hle/kernel/svc_results.h"
 #include "core/hle/service/ldr/ldr.h"
 #include "core/hle/service/service.h"
 #include "core/loader/nro.h"
@@ -118,9 +118,9 @@ public:
     explicit DebugMonitor(Core::System& system_) : ServiceFramework{system_, "ldr:dmnt"} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "AddProcessToDebugLaunchQueue"},
-            {1, nullptr, "ClearDebugLaunchQueue"},
-            {2, nullptr, "GetNsoInfos"},
+            {0, nullptr, "SetProgramArgument"},
+            {1, nullptr, "FlushArguments"},
+            {2, nullptr, "GetProcessModuleInfo"},
         };
         // clang-format on
 
@@ -135,8 +135,8 @@ public:
         static const FunctionInfo functions[] = {
             {0, nullptr, "CreateProcess"},
             {1, nullptr, "GetProgramInfo"},
-            {2, nullptr, "RegisterTitle"},
-            {3, nullptr, "UnregisterTitle"},
+            {2, nullptr, "PinProgram"},
+            {3, nullptr, "UnpinProgram"},
             {4, nullptr, "SetEnabledProgramVerification"},
         };
         // clang-format on
@@ -150,8 +150,8 @@ public:
     explicit Shell(Core::System& system_) : ServiceFramework{system_, "ldr:shel"} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "AddProcessToLaunchQueue"},
-            {1, nullptr, "ClearLaunchQueue"},
+            {0, nullptr, "SetProgramArgument"},
+            {1, nullptr, "FlushArguments"},
         };
         // clang-format on
 
@@ -164,19 +164,19 @@ public:
     explicit RelocatableObject(Core::System& system_) : ServiceFramework{system_, "ldr:ro"} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, &RelocatableObject::LoadNro, "LoadNro"},
-            {1, &RelocatableObject::UnloadNro, "UnloadNro"},
-            {2, &RelocatableObject::LoadNrr, "LoadNrr"},
-            {3, &RelocatableObject::UnloadNrr, "UnloadNrr"},
+            {0, &RelocatableObject::LoadModule, "LoadModule"},
+            {1, &RelocatableObject::UnloadModule, "UnloadModule"},
+            {2, &RelocatableObject::RegisterModuleInfo, "RegisterModuleInfo"},
+            {3, &RelocatableObject::UnregisterModuleInfo, "UnregisterModuleInfo"},
             {4, &RelocatableObject::Initialize, "Initialize"},
-            {10, nullptr, "LoadNrrEx"},
+            {10, nullptr, "RegisterModuleInfo2"},
         };
         // clang-format on
 
         RegisterHandlers(functions);
     }
 
-    void LoadNrr(Kernel::HLERequestContext& ctx) {
+    void RegisterModuleInfo(Kernel::HLERequestContext& ctx) {
         struct Parameters {
             u64_le process_id;
             u64_le nrr_address;
@@ -273,7 +273,7 @@ public:
         rb.Push(RESULT_SUCCESS);
     }
 
-    void UnloadNrr(Kernel::HLERequestContext& ctx) {
+    void UnregisterModuleInfo(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
         const auto pid = rp.Pop<u64>();
         const auto nrr_address = rp.Pop<VAddr>();
@@ -287,12 +287,11 @@ public:
         rb.Push(RESULT_SUCCESS);
     }
 
-    bool ValidateRegionForMap(Kernel::Memory::PageTable& page_table, VAddr start,
-                              std::size_t size) const {
-        constexpr std::size_t padding_size{4 * Kernel::Memory::PageSize};
+    bool ValidateRegionForMap(Kernel::KPageTable& page_table, VAddr start, std::size_t size) const {
+        constexpr std::size_t padding_size{4 * Kernel::PageSize};
         const auto start_info{page_table.QueryInfo(start - 1)};
 
-        if (start_info.state != Kernel::Memory::MemoryState::Free) {
+        if (start_info.state != Kernel::KMemoryState::Free) {
             return {};
         }
 
@@ -302,35 +301,34 @@ public:
 
         const auto end_info{page_table.QueryInfo(start + size)};
 
-        if (end_info.state != Kernel::Memory::MemoryState::Free) {
+        if (end_info.state != Kernel::KMemoryState::Free) {
             return {};
         }
 
         return (start + size + padding_size) <= (end_info.GetAddress() + end_info.GetSize());
     }
 
-    VAddr GetRandomMapRegion(const Kernel::Memory::PageTable& page_table, std::size_t size) const {
+    VAddr GetRandomMapRegion(const Kernel::KPageTable& page_table, std::size_t size) const {
         VAddr addr{};
         const std::size_t end_pages{(page_table.GetAliasCodeRegionSize() - size) >>
-                                    Kernel::Memory::PageBits};
+                                    Kernel::PageBits};
         do {
             addr = page_table.GetAliasCodeRegionStart() +
-                   (Kernel::Memory::SystemControl::GenerateRandomRange(0, end_pages)
-                    << Kernel::Memory::PageBits);
+                   (Kernel::KSystemControl::GenerateRandomRange(0, end_pages) << Kernel::PageBits);
         } while (!page_table.IsInsideAddressSpace(addr, size) ||
                  page_table.IsInsideHeapRegion(addr, size) ||
                  page_table.IsInsideAliasRegion(addr, size));
         return addr;
     }
 
-    ResultVal<VAddr> MapProcessCodeMemory(Kernel::Process* process, VAddr baseAddress,
+    ResultVal<VAddr> MapProcessCodeMemory(Kernel::KProcess* process, VAddr baseAddress,
                                           u64 size) const {
         for (std::size_t retry = 0; retry < MAXIMUM_MAP_RETRIES; retry++) {
             auto& page_table{process->PageTable()};
             const VAddr addr{GetRandomMapRegion(page_table, size)};
             const ResultCode result{page_table.MapProcessCodeMemory(addr, baseAddress, size)};
 
-            if (result == Kernel::ERR_INVALID_ADDRESS_STATE) {
+            if (result == Kernel::ResultInvalidCurrentMemory) {
                 continue;
             }
 
@@ -344,7 +342,7 @@ public:
         return ERROR_INSUFFICIENT_ADDRESS_SPACE;
     }
 
-    ResultVal<VAddr> MapNro(Kernel::Process* process, VAddr nro_addr, std::size_t nro_size,
+    ResultVal<VAddr> MapNro(Kernel::KProcess* process, VAddr nro_addr, std::size_t nro_size,
                             VAddr bss_addr, std::size_t bss_size, std::size_t size) const {
         for (std::size_t retry = 0; retry < MAXIMUM_MAP_RETRIES; retry++) {
             auto& page_table{process->PageTable()};
@@ -361,7 +359,7 @@ public:
                 const ResultCode result{
                     page_table.MapProcessCodeMemory(addr + nro_size, bss_addr, bss_size)};
 
-                if (result == Kernel::ERR_INVALID_ADDRESS_STATE) {
+                if (result == Kernel::ResultInvalidCurrentMemory) {
                     continue;
                 }
 
@@ -380,20 +378,18 @@ public:
         return ERROR_INSUFFICIENT_ADDRESS_SPACE;
     }
 
-    ResultCode LoadNro(Kernel::Process* process, const NROHeader& nro_header, VAddr nro_addr,
+    ResultCode LoadNro(Kernel::KProcess* process, const NROHeader& nro_header, VAddr nro_addr,
                        VAddr start) const {
         const VAddr text_start{start + nro_header.segment_headers[TEXT_INDEX].memory_offset};
         const VAddr ro_start{start + nro_header.segment_headers[RO_INDEX].memory_offset};
         const VAddr data_start{start + nro_header.segment_headers[DATA_INDEX].memory_offset};
         const VAddr bss_start{data_start + nro_header.segment_headers[DATA_INDEX].memory_size};
         const VAddr bss_end_addr{
-            Common::AlignUp(bss_start + nro_header.bss_size, Kernel::Memory::PageSize)};
+            Common::AlignUp(bss_start + nro_header.bss_size, Kernel::PageSize)};
 
-        auto CopyCode{[&](VAddr src_addr, VAddr dst_addr, u64 size) {
-            std::vector<u8> source_data(size);
-            system.Memory().ReadBlock(src_addr, source_data.data(), source_data.size());
-            system.Memory().WriteBlock(dst_addr, source_data.data(), source_data.size());
-        }};
+        const auto CopyCode = [this, process](VAddr src_addr, VAddr dst_addr, u64 size) {
+            system.Memory().CopyBlock(*process, dst_addr, src_addr, size);
+        };
         CopyCode(nro_addr + nro_header.segment_headers[TEXT_INDEX].memory_offset, text_start,
                  nro_header.segment_headers[TEXT_INDEX].memory_size);
         CopyCode(nro_addr + nro_header.segment_headers[RO_INDEX].memory_offset, ro_start,
@@ -402,15 +398,15 @@ public:
                  nro_header.segment_headers[DATA_INDEX].memory_size);
 
         CASCADE_CODE(process->PageTable().SetCodeMemoryPermission(
-            text_start, ro_start - text_start, Kernel::Memory::MemoryPermission::ReadAndExecute));
-        CASCADE_CODE(process->PageTable().SetCodeMemoryPermission(
-            ro_start, data_start - ro_start, Kernel::Memory::MemoryPermission::Read));
+            text_start, ro_start - text_start, Kernel::KMemoryPermission::ReadAndExecute));
+        CASCADE_CODE(process->PageTable().SetCodeMemoryPermission(ro_start, data_start - ro_start,
+                                                                  Kernel::KMemoryPermission::Read));
 
         return process->PageTable().SetCodeMemoryPermission(
-            data_start, bss_end_addr - data_start, Kernel::Memory::MemoryPermission::ReadAndWrite);
+            data_start, bss_end_addr - data_start, Kernel::KMemoryPermission::ReadAndWrite);
     }
 
-    void LoadNro(Kernel::HLERequestContext& ctx) {
+    void LoadModule(Kernel::HLERequestContext& ctx) {
         struct Parameters {
             u64_le process_id;
             u64_le image_address;
@@ -548,7 +544,7 @@ public:
         return RESULT_SUCCESS;
     }
 
-    void UnloadNro(Kernel::HLERequestContext& ctx) {
+    void UnloadModule(Kernel::HLERequestContext& ctx) {
         if (!initialized) {
             LOG_ERROR(Service_LDR, "LDR:RO not initialized before use!");
             IPC::ResponseBuilder rb{ctx, 2};

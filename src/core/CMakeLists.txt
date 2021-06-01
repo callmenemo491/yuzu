@@ -19,7 +19,6 @@ add_library(core STATIC
     core.h
     core_timing.cpp
     core_timing.h
-    core_timing_util.cpp
     core_timing_util.h
     cpu_manager.cpp
     cpu_manager.h
@@ -142,88 +141,114 @@ add_library(core STATIC
     hardware_interrupt_manager.h
     hle/ipc.h
     hle/ipc_helpers.h
-    hle/kernel/address_arbiter.cpp
-    hle/kernel/address_arbiter.h
-    hle/kernel/client_port.cpp
-    hle/kernel/client_port.h
-    hle/kernel/client_session.cpp
-    hle/kernel/client_session.h
+    hle/kernel/board/nintendo/nx/k_system_control.cpp
+    hle/kernel/board/nintendo/nx/k_system_control.h
+    hle/kernel/board/nintendo/nx/secure_monitor.h
     hle/kernel/code_set.cpp
     hle/kernel/code_set.h
-    hle/kernel/errors.h
+    hle/kernel/svc_results.h
     hle/kernel/global_scheduler_context.cpp
     hle/kernel/global_scheduler_context.h
-    hle/kernel/handle_table.cpp
-    hle/kernel/handle_table.h
     hle/kernel/hle_ipc.cpp
     hle/kernel/hle_ipc.h
+    hle/kernel/init/init_slab_setup.cpp
+    hle/kernel/init/init_slab_setup.h
+    hle/kernel/k_address_arbiter.cpp
+    hle/kernel/k_address_arbiter.h
+    hle/kernel/k_address_space_info.cpp
+    hle/kernel/k_address_space_info.h
+    hle/kernel/k_auto_object.cpp
+    hle/kernel/k_auto_object.h
+    hle/kernel/k_auto_object_container.cpp
+    hle/kernel/k_auto_object_container.h
     hle/kernel/k_affinity_mask.h
+    hle/kernel/k_class_token.cpp
+    hle/kernel/k_class_token.h
+    hle/kernel/k_client_port.cpp
+    hle/kernel/k_client_port.h
+    hle/kernel/k_client_session.cpp
+    hle/kernel/k_client_session.h
+    hle/kernel/k_condition_variable.cpp
+    hle/kernel/k_condition_variable.h
+    hle/kernel/k_event.cpp
+    hle/kernel/k_event.h
+    hle/kernel/k_handle_table.cpp
+    hle/kernel/k_handle_table.h
+    hle/kernel/k_light_condition_variable.h
+    hle/kernel/k_light_lock.cpp
+    hle/kernel/k_light_lock.h
+    hle/kernel/k_linked_list.h
+    hle/kernel/k_memory_block.h
+    hle/kernel/k_memory_block_manager.cpp
+    hle/kernel/k_memory_block_manager.h
+    hle/kernel/k_memory_layout.cpp
+    hle/kernel/k_memory_layout.board.nintendo_nx.cpp
+    hle/kernel/k_memory_layout.h
+    hle/kernel/k_memory_manager.cpp
+    hle/kernel/k_memory_manager.h
+    hle/kernel/k_memory_region.h
+    hle/kernel/k_memory_region_type.h
+    hle/kernel/k_page_bitmap.h
+    hle/kernel/k_page_heap.cpp
+    hle/kernel/k_page_heap.h
+    hle/kernel/k_page_linked_list.h
+    hle/kernel/k_page_table.cpp
+    hle/kernel/k_page_table.h
+    hle/kernel/k_port.cpp
+    hle/kernel/k_port.h
     hle/kernel/k_priority_queue.h
+    hle/kernel/k_process.cpp
+    hle/kernel/k_process.h
+    hle/kernel/k_readable_event.cpp
+    hle/kernel/k_readable_event.h
+    hle/kernel/k_resource_limit.cpp
+    hle/kernel/k_resource_limit.h
     hle/kernel/k_scheduler.cpp
     hle/kernel/k_scheduler.h
     hle/kernel/k_scheduler_lock.h
     hle/kernel/k_scoped_lock.h
+    hle/kernel/k_scoped_resource_reservation.h
     hle/kernel/k_scoped_scheduler_lock_and_sleep.h
+    hle/kernel/k_server_port.cpp
+    hle/kernel/k_server_port.h
+    hle/kernel/k_server_session.cpp
+    hle/kernel/k_server_session.h
+    hle/kernel/k_session.cpp
+    hle/kernel/k_session.h
+    hle/kernel/k_shared_memory.cpp
+    hle/kernel/k_shared_memory.h
+    hle/kernel/k_slab_heap.h
+    hle/kernel/k_spin_lock.cpp
+    hle/kernel/k_spin_lock.h
+    hle/kernel/k_synchronization_object.cpp
+    hle/kernel/k_synchronization_object.h
+    hle/kernel/k_system_control.h
+    hle/kernel/k_thread.cpp
+    hle/kernel/k_thread.h
+    hle/kernel/k_thread_queue.h
+    hle/kernel/k_trace.h
+    hle/kernel/k_transfer_memory.cpp
+    hle/kernel/k_transfer_memory.h
+    hle/kernel/k_writable_event.cpp
+    hle/kernel/k_writable_event.h
     hle/kernel/kernel.cpp
     hle/kernel/kernel.h
-    hle/kernel/memory/address_space_info.cpp
-    hle/kernel/memory/address_space_info.h
-    hle/kernel/memory/memory_block.h
-    hle/kernel/memory/memory_block_manager.cpp
-    hle/kernel/memory/memory_block_manager.h
-    hle/kernel/memory/memory_layout.h
-    hle/kernel/memory/memory_manager.cpp
-    hle/kernel/memory/memory_manager.h
-    hle/kernel/memory/memory_types.h
-    hle/kernel/memory/page_linked_list.h
-    hle/kernel/memory/page_heap.cpp
-    hle/kernel/memory/page_heap.h
-    hle/kernel/memory/page_table.cpp
-    hle/kernel/memory/page_table.h
-    hle/kernel/memory/slab_heap.h
-    hle/kernel/memory/system_control.cpp
-    hle/kernel/memory/system_control.h
-    hle/kernel/mutex.cpp
-    hle/kernel/mutex.h
-    hle/kernel/object.cpp
-    hle/kernel/object.h
+    hle/kernel/memory_types.h
     hle/kernel/physical_core.cpp
     hle/kernel/physical_core.h
     hle/kernel/physical_memory.h
-    hle/kernel/process.cpp
-    hle/kernel/process.h
     hle/kernel/process_capability.cpp
     hle/kernel/process_capability.h
-    hle/kernel/readable_event.cpp
-    hle/kernel/readable_event.h
-    hle/kernel/resource_limit.cpp
-    hle/kernel/resource_limit.h
-    hle/kernel/server_port.cpp
-    hle/kernel/server_port.h
-    hle/kernel/server_session.cpp
-    hle/kernel/server_session.h
     hle/kernel/service_thread.cpp
     hle/kernel/service_thread.h
-    hle/kernel/session.cpp
-    hle/kernel/session.h
-    hle/kernel/shared_memory.cpp
-    hle/kernel/shared_memory.h
+    hle/kernel/slab_helpers.h
     hle/kernel/svc.cpp
     hle/kernel/svc.h
+    hle/kernel/svc_common.h
     hle/kernel/svc_types.h
     hle/kernel/svc_wrap.h
-    hle/kernel/synchronization_object.cpp
-    hle/kernel/synchronization_object.h
-    hle/kernel/synchronization.cpp
-    hle/kernel/synchronization.h
-    hle/kernel/thread.cpp
-    hle/kernel/thread.h
     hle/kernel/time_manager.cpp
     hle/kernel/time_manager.h
-    hle/kernel/transfer_memory.cpp
-    hle/kernel/transfer_memory.h
-    hle/kernel/writable_event.cpp
-    hle/kernel/writable_event.h
     hle/lock.cpp
     hle/lock.h
     hle/result.h
@@ -258,8 +283,10 @@ add_library(core STATIC
     hle/service/am/applets/profile_select.h
     hle/service/am/applets/software_keyboard.cpp
     hle/service/am/applets/software_keyboard.h
+    hle/service/am/applets/software_keyboard_types.h
     hle/service/am/applets/web_browser.cpp
     hle/service/am/applets/web_browser.h
+    hle/service/am/applets/web_types.h
     hle/service/am/idle.cpp
     hle/service/am/idle.h
     hle/service/am/omm.cpp
@@ -360,6 +387,8 @@ add_library(core STATIC
     hle/service/glue/arp.h
     hle/service/glue/bgtc.cpp
     hle/service/glue/bgtc.h
+    hle/service/glue/ectx.cpp
+    hle/service/glue/ectx.h
     hle/service/glue/errors.h
     hle/service/glue/glue.cpp
     hle/service/glue/glue.h
@@ -374,6 +403,8 @@ add_library(core STATIC
     hle/service/hid/xcd.cpp
     hle/service/hid/xcd.h
     hle/service/hid/errors.h
+    hle/service/hid/controllers/console_sixaxis.cpp
+    hle/service/hid/controllers/console_sixaxis.h
     hle/service/hid/controllers/controller_base.cpp
     hle/service/hid/controllers/controller_base.h
     hle/service/hid/controllers/debug_pad.cpp
@@ -394,14 +425,13 @@ add_library(core STATIC
     hle/service/hid/controllers/xpad.h
     hle/service/lbl/lbl.cpp
     hle/service/lbl/lbl.h
+    hle/service/ldn/errors.h
     hle/service/ldn/ldn.cpp
     hle/service/ldn/ldn.h
     hle/service/ldr/ldr.cpp
     hle/service/ldr/ldr.h
     hle/service/lm/lm.cpp
     hle/service/lm/lm.h
-    hle/service/lm/manager.cpp
-    hle/service/lm/manager.h
     hle/service/mig/mig.cpp
     hle/service/mig/mig.h
     hle/service/mii/manager.cpp
@@ -606,8 +636,6 @@ add_library(core STATIC
     perf_stats.h
     reporter.cpp
     reporter.h
-    settings.cpp
-    settings.h
     telemetry_session.cpp
     telemetry_session.h
     tools/freezer.cpp
@@ -623,30 +651,31 @@ endif()
 
 if (MSVC)
     target_compile_options(core PRIVATE
-        # 'expression' : signed/unsigned mismatch
-        /we4018
-        # 'argument' : conversion from 'type1' to 'type2', possible loss of data (floating-point)
-        /we4244
-        # 'conversion' : conversion from 'type1' to 'type2', signed/unsigned mismatch
-        /we4245
-        # 'operator': conversion from 'type1:field_bits' to 'type2:field_bits', possible loss of data
-        /we4254
-        # 'var' : conversion from 'size_t' to 'type', possible loss of data
-        /we4267
-        # 'context' : truncation from 'type1' to 'type2'
-        /we4305
+        /we4018 # 'expression' : signed/unsigned mismatch
+        /we4244 # 'argument' : conversion from 'type1' to 'type2', possible loss of data (floating-point)
+        /we4245 # 'conversion' : conversion from 'type1' to 'type2', signed/unsigned mismatch
+        /we4254 # 'operator': conversion from 'type1:field_bits' to 'type2:field_bits', possible loss of data
+        /we4267 # 'var' : conversion from 'size_t' to 'type', possible loss of data
+        /we4305 # 'context' : truncation from 'type1' to 'type2'
+        /we4456 # Declaration of 'identifier' hides previous local declaration
+        /we4457 # Declaration of 'identifier' hides function parameter
+        /we4458 # Declaration of 'identifier' hides class member
+        /we4459 # Declaration of 'identifier' hides global declaration
+        /we4715 # 'function' : not all control paths return a value
     )
 else()
     target_compile_options(core PRIVATE
         -Werror=conversion
         -Werror=ignored-qualifiers
         -Werror=implicit-fallthrough
-        -Werror=reorder
         -Werror=sign-compare
-        -Werror=unused-variable
+        -Werror=shadow
 
+        $<$<CXX_COMPILER_ID:GNU>:-Werror=class-memaccess>
         $<$<CXX_COMPILER_ID:GNU>:-Werror=unused-but-set-parameter>
         $<$<CXX_COMPILER_ID:GNU>:-Werror=unused-but-set-variable>
+
+        $<$<CXX_COMPILER_ID:Clang>:-fsized-deallocation>
 
         -Wno-sign-conversion
     )
@@ -655,7 +684,7 @@ endif()
 create_target_directory_groups(core)
 
 target_link_libraries(core PUBLIC common PRIVATE audio_core video_core)
-target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt::fmt nlohmann_json::nlohmann_json mbedtls opus zip)
+target_link_libraries(core PUBLIC Boost::boost PRIVATE fmt::fmt nlohmann_json::nlohmann_json mbedtls Opus::Opus zip)
 
 if (YUZU_ENABLE_BOXCAT)
     target_compile_definitions(core PRIVATE -DYUZU_ENABLE_BOXCAT)

@@ -5,6 +5,7 @@
 #include <mutex>
 #include <utility>
 
+#include "common/settings.h"
 #include "common/threadsafe_queue.h"
 #include "input_common/mouse/mouse_input.h"
 #include "input_common/mouse/mouse_poller.h"
@@ -13,16 +14,25 @@ namespace InputCommon {
 
 class MouseButton final : public Input::ButtonDevice {
 public:
-    explicit MouseButton(u32 button_, const MouseInput::Mouse* mouse_input_)
-        : button(button_), mouse_input(mouse_input_) {}
+    explicit MouseButton(u32 button_, bool toggle_, MouseInput::Mouse* mouse_input_)
+        : button(button_), toggle(toggle_), mouse_input(mouse_input_) {}
 
     bool GetStatus() const override {
-        return mouse_input->GetMouseState(button).pressed;
+        const bool button_state = mouse_input->GetMouseState(button).pressed;
+        if (!toggle) {
+            return button_state;
+        }
+
+        if (button_state) {
+            return mouse_input->ToggleButton(button);
+        }
+        return mouse_input->UnlockButton(button);
     }
 
 private:
     const u32 button;
-    const MouseInput::Mouse* mouse_input;
+    const bool toggle;
+    MouseInput::Mouse* mouse_input;
 };
 
 MouseButtonFactory::MouseButtonFactory(std::shared_ptr<MouseInput::Mouse> mouse_input_)
@@ -31,8 +41,9 @@ MouseButtonFactory::MouseButtonFactory(std::shared_ptr<MouseInput::Mouse> mouse_
 std::unique_ptr<Input::ButtonDevice> MouseButtonFactory::Create(
     const Common::ParamPackage& params) {
     const auto button_id = params.Get("button", 0);
+    const auto toggle = params.Get("toggle", false);
 
-    return std::make_unique<MouseButton>(button_id, mouse_input.get());
+    return std::make_unique<MouseButton>(button_id, toggle, mouse_input.get());
 }
 
 Common::ParamPackage MouseButtonFactory::GetNextInput() const {
@@ -71,7 +82,7 @@ public:
         std::lock_guard lock{mutex};
         const auto axis_value =
             static_cast<float>(mouse_input->GetMouseState(button).axis.at(axis));
-        return axis_value / (100.0f * range);
+        return axis_value * Settings::values.mouse_panning_sensitivity / (100.0f * range);
     }
 
     std::pair<float, float> GetAnalog(u32 analog_axis_x, u32 analog_axis_y) const {
@@ -104,6 +115,16 @@ public:
                     y / r * (r - deadzone) / (1 - deadzone)};
         }
         return {0.0f, 0.0f};
+    }
+
+    std::tuple<float, float> GetRawStatus() const override {
+        const float x = GetAxis(axis_x);
+        const float y = GetAxis(axis_y);
+        return {x, y};
+    }
+
+    Input::AnalogProperties GetAnalogProperties() const override {
+        return {deadzone, range, 0.5f};
     }
 
 private:

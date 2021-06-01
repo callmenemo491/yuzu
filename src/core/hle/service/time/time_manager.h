@@ -30,7 +30,7 @@ class NetworkSystemClockContextWriter;
 
 class TimeManager final {
 public:
-    explicit TimeManager(Core::System& system);
+    explicit TimeManager(Core::System& system_);
     ~TimeManager();
 
     void Initialize();
@@ -60,6 +60,8 @@ public:
     SharedMemory& GetSharedMemory();
 
     const SharedMemory& GetSharedMemory() const;
+
+    void Shutdown();
 
     void SetupTimeZoneManager(std::string location_name,
                               Clock::SteadyClockTimePoint time_zone_updated_time_point,

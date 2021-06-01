@@ -7,8 +7,9 @@
 #include <fmt/format.h>
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/service/nvdrv/devices/nvdevice.h"
 #include "core/hle/service/nvdrv/devices/nvdisp_disp0.h"
 #include "core/hle/service/nvdrv/devices/nvhost_as_gpu.h"
@@ -41,8 +42,8 @@ void InstallInterfaces(SM::ServiceManager& service_manager, NVFlinger::NVFlinger
 Module::Module(Core::System& system) : syncpoint_manager{system.GPU()} {
     auto& kernel = system.Kernel();
     for (u32 i = 0; i < MaxNvEvents; i++) {
-        std::string event_label = fmt::format("NVDRV::NvEvent_{}", i);
-        events_interface.events[i] = {Kernel::WritableEvent::CreateEventPair(kernel, event_label)};
+        events_interface.events[i].event = Kernel::KEvent::Create(kernel);
+        events_interface.events[i].event->Initialize(fmt::format("NVDRV::NvEvent_{}", i));
         events_interface.status[i] = EventState::Free;
         events_interface.registered[i] = false;
     }
@@ -55,12 +56,19 @@ Module::Module(Core::System& system) : syncpoint_manager{system.GPU()} {
     devices["/dev/nvdisp_disp0"] = std::make_shared<Devices::nvdisp_disp0>(system, nvmap_dev);
     devices["/dev/nvhost-ctrl"] =
         std::make_shared<Devices::nvhost_ctrl>(system, events_interface, syncpoint_manager);
-    devices["/dev/nvhost-nvdec"] = std::make_shared<Devices::nvhost_nvdec>(system, nvmap_dev);
+    devices["/dev/nvhost-nvdec"] =
+        std::make_shared<Devices::nvhost_nvdec>(system, nvmap_dev, syncpoint_manager);
     devices["/dev/nvhost-nvjpg"] = std::make_shared<Devices::nvhost_nvjpg>(system);
-    devices["/dev/nvhost-vic"] = std::make_shared<Devices::nvhost_vic>(system, nvmap_dev);
+    devices["/dev/nvhost-vic"] =
+        std::make_shared<Devices::nvhost_vic>(system, nvmap_dev, syncpoint_manager);
 }
 
-Module::~Module() = default;
+Module::~Module() {
+    for (u32 i = 0; i < MaxNvEvents; i++) {
+        events_interface.events[i].event->Close();
+        events_interface.events[i].event = nullptr;
+    }
+}
 
 NvResult Module::VerifyFD(DeviceFD fd) const {
     if (fd < 0) {
@@ -85,6 +93,8 @@ DeviceFD Module::Open(const std::string& device_name) {
     auto device = devices[device_name];
     const DeviceFD fd = next_fd++;
 
+    device->OnOpen(fd);
+
     open_files[fd] = std::move(device);
 
     return fd;
@@ -104,7 +114,7 @@ NvResult Module::Ioctl1(DeviceFD fd, Ioctl command, const std::vector<u8>& input
         return NvResult::NotImplemented;
     }
 
-    return itr->second->Ioctl1(command, input, output);
+    return itr->second->Ioctl1(fd, command, input, output);
 }
 
 NvResult Module::Ioctl2(DeviceFD fd, Ioctl command, const std::vector<u8>& input,
@@ -121,7 +131,7 @@ NvResult Module::Ioctl2(DeviceFD fd, Ioctl command, const std::vector<u8>& input
         return NvResult::NotImplemented;
     }
 
-    return itr->second->Ioctl2(command, input, inline_input, output);
+    return itr->second->Ioctl2(fd, command, input, inline_input, output);
 }
 
 NvResult Module::Ioctl3(DeviceFD fd, Ioctl command, const std::vector<u8>& input,
@@ -138,7 +148,7 @@ NvResult Module::Ioctl3(DeviceFD fd, Ioctl command, const std::vector<u8>& input
         return NvResult::NotImplemented;
     }
 
-    return itr->second->Ioctl3(command, input, output, inline_output);
+    return itr->second->Ioctl3(fd, command, input, output, inline_output);
 }
 
 NvResult Module::Close(DeviceFD fd) {
@@ -154,6 +164,8 @@ NvResult Module::Close(DeviceFD fd) {
         return NvResult::NotImplemented;
     }
 
+    itr->second->OnClose(fd);
+
     open_files.erase(itr);
 
     return NvResult::Success;
@@ -164,17 +176,17 @@ void Module::SignalSyncpt(const u32 syncpoint_id, const u32 value) {
         if (events_interface.assigned_syncpt[i] == syncpoint_id &&
             events_interface.assigned_value[i] == value) {
             events_interface.LiberateEvent(i);
-            events_interface.events[i].event.writable->Signal();
+            events_interface.events[i].event->GetWritableEvent().Signal();
         }
     }
 }
 
-std::shared_ptr<Kernel::ReadableEvent> Module::GetEvent(const u32 event_id) const {
-    return events_interface.events[event_id].event.readable;
+Kernel::KReadableEvent& Module::GetEvent(const u32 event_id) {
+    return events_interface.events[event_id].event->GetReadableEvent();
 }
 
-std::shared_ptr<Kernel::WritableEvent> Module::GetEventWriteable(const u32 event_id) const {
-    return events_interface.events[event_id].event.writable;
+Kernel::KWritableEvent& Module::GetEventWriteable(const u32 event_id) {
+    return events_interface.events[event_id].event->GetWritableEvent();
 }
 
 } // namespace Service::Nvidia

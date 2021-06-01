@@ -29,10 +29,10 @@
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/frontend/framebuffer_layout.h"
-#include "core/hle/kernel/process.h"
-#include "core/settings.h"
+#include "core/hle/kernel/k_process.h"
 #include "input_common/keyboard.h"
 #include "input_common/main.h"
 #include "input_common/mouse/mouse_input.h"
@@ -64,7 +64,7 @@ void EmuThread::run() {
 
     emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
 
-    system.Renderer().Rasterizer().LoadDiskResources(
+    system.Renderer().ReadRasterizer()->LoadDiskResources(
         system.CurrentProcess()->GetTitleID(), stop_run,
         [this](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
             emit LoadProgress(stage, value, total);
@@ -126,7 +126,7 @@ public:
     /// Create the original context that should be shared from
     explicit OpenGLSharedContext(QSurface* surface) : surface(surface) {
         QSurfaceFormat format;
-        format.setVersion(4, 3);
+        format.setVersion(4, 6);
         format.setProfile(QSurfaceFormat::CompatibilityProfile);
         format.setOption(QSurfaceFormat::FormatOption::DeprecatedFunctions);
         if (Settings::values.renderer_debug) {
@@ -290,8 +290,8 @@ GRenderWindow::GRenderWindow(GMainWindow* parent, EmuThread* emu_thread_,
                             QString::fromUtf8(Common::g_scm_branch),
                             QString::fromUtf8(Common::g_scm_desc)));
     setAttribute(Qt::WA_AcceptTouchEvents);
-    auto layout = new QHBoxLayout(this);
-    layout->setMargin(0);
+    auto* layout = new QHBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
     setLayout(layout);
     input_subsystem->Initialize();
 
@@ -376,11 +376,34 @@ void GRenderWindow::closeEvent(QCloseEvent* event) {
 }
 
 void GRenderWindow::keyPressEvent(QKeyEvent* event) {
-    input_subsystem->GetKeyboard()->PressKey(event->key());
+    if (!event->isAutoRepeat()) {
+        input_subsystem->GetKeyboard()->PressKey(event->key());
+    }
 }
 
 void GRenderWindow::keyReleaseEvent(QKeyEvent* event) {
-    input_subsystem->GetKeyboard()->ReleaseKey(event->key());
+    if (!event->isAutoRepeat()) {
+        input_subsystem->GetKeyboard()->ReleaseKey(event->key());
+    }
+}
+
+MouseInput::MouseButton GRenderWindow::QtButtonToMouseButton(Qt::MouseButton button) {
+    switch (button) {
+    case Qt::LeftButton:
+        return MouseInput::MouseButton::Left;
+    case Qt::RightButton:
+        return MouseInput::MouseButton::Right;
+    case Qt::MiddleButton:
+        return MouseInput::MouseButton::Wheel;
+    case Qt::BackButton:
+        return MouseInput::MouseButton::Backward;
+    case Qt::ForwardButton:
+        return MouseInput::MouseButton::Forward;
+    case Qt::TaskButton:
+        return MouseInput::MouseButton::Task;
+    default:
+        return MouseInput::MouseButton::Extra;
+    }
 }
 
 void GRenderWindow::mousePressEvent(QMouseEvent* event) {
@@ -391,13 +414,14 @@ void GRenderWindow::mousePressEvent(QMouseEvent* event) {
 
     auto pos = event->pos();
     const auto [x, y] = ScaleTouch(pos);
-    input_subsystem->GetMouse()->PressButton(x, y, event->button());
+    const auto button = QtButtonToMouseButton(event->button());
+    input_subsystem->GetMouse()->PressButton(x, y, button);
 
     if (event->button() == Qt::LeftButton) {
-        this->TouchPressed(x, y);
+        this->TouchPressed(x, y, 0);
     }
 
-    QWidget::mousePressEvent(event);
+    emit MouseActivity();
 }
 
 void GRenderWindow::mouseMoveEvent(QMouseEvent* event) {
@@ -405,13 +429,18 @@ void GRenderWindow::mouseMoveEvent(QMouseEvent* event) {
     if (event->source() == Qt::MouseEventSynthesizedBySystem) {
         return;
     }
-
     auto pos = event->pos();
     const auto [x, y] = ScaleTouch(pos);
-    input_subsystem->GetMouse()->MouseMove(x, y);
-    this->TouchMoved(x, y);
+    const int center_x = width() / 2;
+    const int center_y = height() / 2;
+    input_subsystem->GetMouse()->MouseMove(x, y, center_x, center_y);
+    this->TouchMoved(x, y, 0);
 
-    QWidget::mouseMoveEvent(event);
+    if (Settings::values.mouse_panning) {
+        QCursor::setPos(mapToGlobal({center_x, center_y}));
+    }
+
+    emit MouseActivity();
 }
 
 void GRenderWindow::mouseReleaseEvent(QMouseEvent* event) {
@@ -420,39 +449,76 @@ void GRenderWindow::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
 
-    input_subsystem->GetMouse()->ReleaseButton(event->button());
+    const auto button = QtButtonToMouseButton(event->button());
+    input_subsystem->GetMouse()->ReleaseButton(button);
 
     if (event->button() == Qt::LeftButton) {
-        this->TouchReleased();
+        this->TouchReleased(0);
     }
 }
 
 void GRenderWindow::TouchBeginEvent(const QTouchEvent* event) {
-    // TouchBegin always has exactly one touch point, so take the .first()
-    const auto [x, y] = ScaleTouch(event->touchPoints().first().pos());
-    this->TouchPressed(x, y);
+    QList<QTouchEvent::TouchPoint> touch_points = event->touchPoints();
+    for (const auto& touch_point : touch_points) {
+        if (!TouchUpdate(touch_point)) {
+            TouchStart(touch_point);
+        }
+    }
 }
 
 void GRenderWindow::TouchUpdateEvent(const QTouchEvent* event) {
-    QPointF pos;
-    int active_points = 0;
-
-    // average all active touch points
-    for (const auto& tp : event->touchPoints()) {
-        if (tp.state() & (Qt::TouchPointPressed | Qt::TouchPointMoved | Qt::TouchPointStationary)) {
-            active_points++;
-            pos += tp.pos();
+    QList<QTouchEvent::TouchPoint> touch_points = event->touchPoints();
+    for (const auto& touch_point : touch_points) {
+        if (!TouchUpdate(touch_point)) {
+            TouchStart(touch_point);
         }
     }
-
-    pos /= active_points;
-
-    const auto [x, y] = ScaleTouch(pos);
-    this->TouchMoved(x, y);
+    // Release all inactive points
+    for (std::size_t id = 0; id < touch_ids.size(); ++id) {
+        if (!TouchExist(touch_ids[id], touch_points)) {
+            touch_ids[id] = 0;
+            this->TouchReleased(id + 1);
+        }
+    }
 }
 
 void GRenderWindow::TouchEndEvent() {
-    this->TouchReleased();
+    for (std::size_t id = 0; id < touch_ids.size(); ++id) {
+        if (touch_ids[id] != 0) {
+            touch_ids[id] = 0;
+            this->TouchReleased(id + 1);
+        }
+    }
+}
+
+bool GRenderWindow::TouchStart(const QTouchEvent::TouchPoint& touch_point) {
+    for (std::size_t id = 0; id < touch_ids.size(); ++id) {
+        if (touch_ids[id] == 0) {
+            touch_ids[id] = touch_point.id() + 1;
+            const auto [x, y] = ScaleTouch(touch_point.pos());
+            this->TouchPressed(x, y, id + 1);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool GRenderWindow::TouchUpdate(const QTouchEvent::TouchPoint& touch_point) {
+    for (std::size_t id = 0; id < touch_ids.size(); ++id) {
+        if (touch_ids[id] == static_cast<std::size_t>(touch_point.id() + 1)) {
+            const auto [x, y] = ScaleTouch(touch_point.pos());
+            this->TouchMoved(x, y, id + 1);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool GRenderWindow::TouchExist(std::size_t id,
+                               const QList<QTouchEvent::TouchPoint>& touch_points) const {
+    return std::any_of(touch_points.begin(), touch_points.end(), [id](const auto& point) {
+        return id == static_cast<std::size_t>(point.id() + 1);
+    });
 }
 
 bool GRenderWindow::event(QEvent* event) {
@@ -473,6 +539,8 @@ bool GRenderWindow::event(QEvent* event) {
 void GRenderWindow::focusOutEvent(QFocusEvent* event) {
     QWidget::focusOutEvent(event);
     input_subsystem->GetKeyboard()->ReleaseAllKeys();
+    input_subsystem->GetMouse()->ReleaseAllButtons();
+    this->TouchReleased(0);
 }
 
 void GRenderWindow::resizeEvent(QResizeEvent* event) {
@@ -615,10 +683,10 @@ bool GRenderWindow::LoadOpenGL() {
     const QString renderer =
         QString::fromUtf8(reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
 
-    if (!GLAD_GL_VERSION_4_3) {
-        LOG_ERROR(Frontend, "GPU does not support OpenGL 4.3: {}", renderer.toStdString());
-        QMessageBox::warning(this, tr("Error while initializing OpenGL 4.3!"),
-                             tr("Your GPU may not support OpenGL 4.3, or you do not have the "
+    if (!GLAD_GL_VERSION_4_6) {
+        LOG_ERROR(Frontend, "GPU does not support OpenGL 4.6: {}", renderer.toStdString());
+        QMessageBox::warning(this, tr("Error while initializing OpenGL 4.6!"),
+                             tr("Your GPU may not support OpenGL 4.6, or you do not have the "
                                 "latest graphics driver.<br><br>GL Renderer:<br>%1")
                                  .arg(renderer));
         return false;
@@ -641,26 +709,13 @@ bool GRenderWindow::LoadOpenGL() {
 QStringList GRenderWindow::GetUnsupportedGLExtensions() const {
     QStringList unsupported_ext;
 
-    if (!GLAD_GL_ARB_buffer_storage)
-        unsupported_ext.append(QStringLiteral("ARB_buffer_storage"));
-    if (!GLAD_GL_ARB_direct_state_access)
-        unsupported_ext.append(QStringLiteral("ARB_direct_state_access"));
-    if (!GLAD_GL_ARB_vertex_type_10f_11f_11f_rev)
-        unsupported_ext.append(QStringLiteral("ARB_vertex_type_10f_11f_11f_rev"));
-    if (!GLAD_GL_ARB_texture_mirror_clamp_to_edge)
-        unsupported_ext.append(QStringLiteral("ARB_texture_mirror_clamp_to_edge"));
-    if (!GLAD_GL_ARB_multi_bind)
-        unsupported_ext.append(QStringLiteral("ARB_multi_bind"));
-    if (!GLAD_GL_ARB_clip_control)
-        unsupported_ext.append(QStringLiteral("ARB_clip_control"));
-
     // Extensions required to support some texture formats.
-    if (!GLAD_GL_EXT_texture_compression_s3tc)
+    if (!GLAD_GL_EXT_texture_compression_s3tc) {
         unsupported_ext.append(QStringLiteral("EXT_texture_compression_s3tc"));
-    if (!GLAD_GL_ARB_texture_compression_rgtc)
+    }
+    if (!GLAD_GL_ARB_texture_compression_rgtc) {
         unsupported_ext.append(QStringLiteral("ARB_texture_compression_rgtc"));
-    if (!GLAD_GL_ARB_depth_buffer_float)
-        unsupported_ext.append(QStringLiteral("ARB_depth_buffer_float"));
+    }
 
     if (!unsupported_ext.empty()) {
         LOG_ERROR(Frontend, "GPU does not support all required extensions: {}",
@@ -687,4 +742,16 @@ void GRenderWindow::showEvent(QShowEvent* event) {
     // windowHandle() is not initialized until the Window is shown, so we connect it here.
     connect(windowHandle(), &QWindow::screenChanged, this, &GRenderWindow::OnFramebufferSizeChanged,
             Qt::UniqueConnection);
+}
+
+bool GRenderWindow::eventFilter(QObject* object, QEvent* event) {
+    if (event->type() == QEvent::HoverMove) {
+        if (Settings::values.mouse_panning) {
+            auto* hover_event = static_cast<QMouseEvent*>(event);
+            mouseMoveEvent(hover_event);
+            return false;
+        }
+        emit MouseActivity();
+    }
+    return false;
 }

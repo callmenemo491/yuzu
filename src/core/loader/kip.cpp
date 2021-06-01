@@ -6,8 +6,8 @@
 #include "core/file_sys/kernel_executable.h"
 #include "core/file_sys/program_metadata.h"
 #include "core/hle/kernel/code_set.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/loader/kip.h"
 #include "core/memory.h"
 
@@ -24,9 +24,9 @@ AppLoader_KIP::AppLoader_KIP(FileSys::VirtualFile file_)
 
 AppLoader_KIP::~AppLoader_KIP() = default;
 
-FileType AppLoader_KIP::IdentifyType(const FileSys::VirtualFile& file) {
+FileType AppLoader_KIP::IdentifyType(const FileSys::VirtualFile& in_file) {
     u32_le magic{};
-    if (file->GetSize() < sizeof(u32) || file->ReadObject(&magic) != sizeof(u32)) {
+    if (in_file->GetSize() < sizeof(u32) || in_file->ReadObject(&magic) != sizeof(u32)) {
         return FileType::Error;
     }
 
@@ -42,7 +42,7 @@ FileType AppLoader_KIP::GetFileType() const {
                                                                          : FileType::Error;
 }
 
-AppLoader::LoadResult AppLoader_KIP::Load(Kernel::Process& process,
+AppLoader::LoadResult AppLoader_KIP::Load(Kernel::KProcess& process,
                                           [[maybe_unused]] Core::System& system) {
     if (is_loaded) {
         return {ResultStatus::ErrorAlreadyLoaded, {}};
@@ -56,10 +56,10 @@ AppLoader::LoadResult AppLoader_KIP::Load(Kernel::Process& process,
         return {kip->GetStatus(), {}};
     }
 
-    const auto get_kip_address_space_type = [](const auto& kip) {
-        return kip.Is64Bit()
-                   ? (kip.Is39BitAddressSpace() ? FileSys::ProgramAddressSpaceType::Is39Bit
-                                                : FileSys::ProgramAddressSpaceType::Is36Bit)
+    const auto get_kip_address_space_type = [](const auto& kip_type) {
+        return kip_type.Is64Bit()
+                   ? (kip_type.Is39BitAddressSpace() ? FileSys::ProgramAddressSpaceType::Is39Bit
+                                                     : FileSys::ProgramAddressSpaceType::Is36Bit)
                    : FileSys::ProgramAddressSpaceType::Is32Bit;
     };
 
@@ -68,7 +68,8 @@ AppLoader::LoadResult AppLoader_KIP::Load(Kernel::Process& process,
     FileSys::ProgramMetadata metadata;
     metadata.LoadManual(kip->Is64Bit(), address_space, kip->GetMainThreadPriority(),
                         kip->GetMainThreadCpuCore(), kip->GetMainThreadStackSize(),
-                        kip->GetTitleID(), 0xFFFFFFFFFFFFFFFF, kip->GetKernelCapabilities());
+                        kip->GetTitleID(), 0xFFFFFFFFFFFFFFFF, 0x1FE00000,
+                        kip->GetKernelCapabilities());
 
     const VAddr base_address = process.PageTable().GetCodeRegionStart();
     Kernel::CodeSet codeset;

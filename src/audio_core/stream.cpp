@@ -11,8 +11,8 @@
 #include "audio_core/stream.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/core_timing.h"
-#include "core/settings.h"
 
 namespace AudioCore {
 
@@ -49,6 +49,14 @@ void Stream::Play() {
 void Stream::Stop() {
     state = State::Stopped;
     UNIMPLEMENTED();
+}
+
+bool Stream::Flush() {
+    const bool had_buffers = !queued_buffers.empty();
+    while (!queued_buffers.empty()) {
+        queued_buffers.pop();
+    }
+    return had_buffers;
 }
 
 void Stream::SetVolume(float volume) {
@@ -103,7 +111,14 @@ void Stream::PlayNextBuffer(std::chrono::nanoseconds ns_late) {
 
     sink_stream.EnqueueSamples(GetNumChannels(), active_buffer->GetSamples());
 
-    core_timing.ScheduleEvent(GetBufferReleaseNS(*active_buffer) - ns_late, release_event, {});
+    const auto buffer_release_ns = GetBufferReleaseNS(*active_buffer);
+
+    // If ns_late is higher than the update rate ignore the delay
+    if (ns_late > buffer_release_ns) {
+        ns_late = {};
+    }
+
+    core_timing.ScheduleEvent(buffer_release_ns - ns_late, release_event, {});
 }
 
 void Stream::ReleaseActiveBuffer(std::chrono::nanoseconds ns_late) {

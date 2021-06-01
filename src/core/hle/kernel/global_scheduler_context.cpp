@@ -12,17 +12,17 @@
 
 namespace Kernel {
 
-GlobalSchedulerContext::GlobalSchedulerContext(KernelCore& kernel)
-    : kernel{kernel}, scheduler_lock{kernel} {}
+GlobalSchedulerContext::GlobalSchedulerContext(KernelCore& kernel_)
+    : kernel{kernel_}, scheduler_lock{kernel_} {}
 
 GlobalSchedulerContext::~GlobalSchedulerContext() = default;
 
-void GlobalSchedulerContext::AddThread(std::shared_ptr<Thread> thread) {
+void GlobalSchedulerContext::AddThread(KThread* thread) {
     std::scoped_lock lock{global_list_guard};
-    thread_list.push_back(std::move(thread));
+    thread_list.push_back(thread);
 }
 
-void GlobalSchedulerContext::RemoveThread(std::shared_ptr<Thread> thread) {
+void GlobalSchedulerContext::RemoveThread(KThread* thread) {
     std::scoped_lock lock{global_list_guard};
     thread_list.erase(std::remove(thread_list.begin(), thread_list.end(), thread),
                       thread_list.end());

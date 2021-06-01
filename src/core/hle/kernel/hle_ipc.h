@@ -11,12 +11,14 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-#include <boost/container/small_vector.hpp>
+
+#include "common/assert.h"
 #include "common/common_types.h"
 #include "common/concepts.h"
 #include "common/swap.h"
 #include "core/hle/ipc.h"
-#include "core/hle/kernel/object.h"
+#include "core/hle/kernel/k_auto_object.h"
+#include "core/hle/kernel/svc_common.h"
 
 union ResultCode;
 
@@ -35,14 +37,15 @@ class ServiceFrameworkBase;
 namespace Kernel {
 
 class Domain;
-class HandleTable;
 class HLERequestContext;
 class KernelCore;
-class Process;
-class ServerSession;
-class Thread;
-class ReadableEvent;
-class WritableEvent;
+class KHandleTable;
+class KProcess;
+class KServerSession;
+class KThread;
+class KReadableEvent;
+class KSession;
+class KWritableEvent;
 
 enum class ThreadWakeupReason;
 
@@ -64,27 +67,85 @@ public:
      * this request (ServerSession, Originator thread, Translated command buffer, etc).
      * @returns ResultCode the result code of the translate operation.
      */
-    virtual ResultCode HandleSyncRequest(Kernel::HLERequestContext& context) = 0;
+    virtual ResultCode HandleSyncRequest(Kernel::KServerSession& session,
+                                         Kernel::HLERequestContext& context) = 0;
 
     /**
      * Signals that a client has just connected to this HLE handler and keeps the
      * associated ServerSession alive for the duration of the connection.
      * @param server_session Owning pointer to the ServerSession associated with the connection.
      */
-    void ClientConnected(std::shared_ptr<ServerSession> server_session);
+    void ClientConnected(KServerSession* session);
 
     /**
      * Signals that a client has just disconnected from this HLE handler and releases the
      * associated ServerSession.
      * @param server_session ServerSession associated with the connection.
      */
-    void ClientDisconnected(const std::shared_ptr<ServerSession>& server_session);
+    void ClientDisconnected(KServerSession* session);
+};
 
-protected:
-    /// List of sessions that are connected to this handler.
-    /// A ServerSession whose server endpoint is an HLE implementation is kept alive by this list
-    /// for the duration of the connection.
-    std::vector<std::shared_ptr<ServerSession>> connected_sessions;
+using SessionRequestHandlerPtr = std::shared_ptr<SessionRequestHandler>;
+
+/**
+ * Manages the underlying HLE requests for a session, and whether (or not) the session should be
+ * treated as a domain. This is managed separately from server sessions, as this state is shared
+ * when objects are cloned.
+ */
+class SessionRequestManager final {
+public:
+    SessionRequestManager() = default;
+
+    bool IsDomain() const {
+        return is_domain;
+    }
+
+    void ConvertToDomain() {
+        domain_handlers = {session_handler};
+        is_domain = true;
+    }
+
+    std::size_t DomainHandlerCount() const {
+        return domain_handlers.size();
+    }
+
+    bool HasSessionHandler() const {
+        return session_handler != nullptr;
+    }
+
+    SessionRequestHandler& SessionHandler() {
+        return *session_handler;
+    }
+
+    const SessionRequestHandler& SessionHandler() const {
+        return *session_handler;
+    }
+
+    void CloseDomainHandler(std::size_t index) {
+        if (index < DomainHandlerCount()) {
+            domain_handlers[index] = nullptr;
+        } else {
+            UNREACHABLE_MSG("Unexpected handler index {}", index);
+        }
+    }
+
+    SessionRequestHandlerPtr DomainHandler(std::size_t index) const {
+        ASSERT_MSG(index < DomainHandlerCount(), "Unexpected handler index {}", index);
+        return domain_handlers.at(index);
+    }
+
+    void AppendDomainHandler(SessionRequestHandlerPtr&& handler) {
+        domain_handlers.emplace_back(std::move(handler));
+    }
+
+    void SetSessionHandler(SessionRequestHandlerPtr&& handler) {
+        session_handler = std::move(handler);
+    }
+
+private:
+    bool is_domain{};
+    SessionRequestHandlerPtr session_handler;
+    std::vector<SessionRequestHandlerPtr> domain_handlers;
 };
 
 /**
@@ -109,8 +170,7 @@ protected:
 class HLERequestContext {
 public:
     explicit HLERequestContext(KernelCore& kernel, Core::Memory::Memory& memory,
-                               std::shared_ptr<ServerSession> session,
-                               std::shared_ptr<Thread> thread);
+                               KServerSession* session, KThread* thread);
     ~HLERequestContext();
 
     /// Returns a pointer to the IPC command buffer for this request.
@@ -122,29 +182,43 @@ public:
      * Returns the session through which this request was made. This can be used as a map key to
      * access per-client data on services.
      */
-    const std::shared_ptr<Kernel::ServerSession>& Session() const {
+    Kernel::KServerSession* Session() {
         return server_session;
     }
 
-    using WakeupCallback = std::function<void(
-        std::shared_ptr<Thread> thread, HLERequestContext& context, ThreadWakeupReason reason)>;
-
     /// Populates this context with data from the requesting process/thread.
-    ResultCode PopulateFromIncomingCommandBuffer(const HandleTable& handle_table,
+    ResultCode PopulateFromIncomingCommandBuffer(const KHandleTable& handle_table,
                                                  u32_le* src_cmdbuf);
 
     /// Writes data from this context back to the requesting process/thread.
-    ResultCode WriteToOutgoingCommandBuffer(Thread& thread);
+    ResultCode WriteToOutgoingCommandBuffer(KThread& requesting_thread);
+
+    u32_le GetHipcCommand() const {
+        return command;
+    }
+
+    u32_le GetTipcCommand() const {
+        return static_cast<u32_le>(command_header->type.Value()) -
+               static_cast<u32_le>(IPC::CommandType::TIPC_CommandRegion);
+    }
 
     u32_le GetCommand() const {
-        return command;
+        return command_header->IsTipc() ? GetTipcCommand() : GetHipcCommand();
+    }
+
+    bool IsTipc() const {
+        return command_header->IsTipc();
     }
 
     IPC::CommandType GetCommandType() const {
         return command_header->type;
     }
 
-    unsigned GetDataPayloadOffset() const {
+    u64 GetPID() const {
+        return pid;
+    }
+
+    u32 GetDataPayloadOffset() const {
         return data_payload_offset;
     }
 
@@ -207,65 +281,44 @@ public:
     /// Helper function to get the size of the output buffer
     std::size_t GetWriteBufferSize(std::size_t buffer_index = 0) const;
 
-    template <typename T>
-    std::shared_ptr<T> GetCopyObject(std::size_t index) {
-        return DynamicObjectCast<T>(copy_objects.at(index));
+    /// Helper function to test whether the input buffer at buffer_index can be read
+    bool CanReadBuffer(std::size_t buffer_index = 0) const;
+
+    /// Helper function to test whether the output buffer at buffer_index can be written
+    bool CanWriteBuffer(std::size_t buffer_index = 0) const;
+
+    Handle GetCopyHandle(std::size_t index) const {
+        return incoming_copy_handles.at(index);
+    }
+
+    Handle GetMoveHandle(std::size_t index) const {
+        return incoming_move_handles.at(index);
+    }
+
+    void AddMoveObject(KAutoObject* object) {
+        outgoing_move_objects.emplace_back(object);
+    }
+
+    void AddCopyObject(KAutoObject* object) {
+        outgoing_copy_objects.emplace_back(object);
+    }
+
+    void AddDomainObject(SessionRequestHandlerPtr object) {
+        outgoing_domain_objects.emplace_back(std::move(object));
     }
 
     template <typename T>
-    std::shared_ptr<T> GetMoveObject(std::size_t index) {
-        return DynamicObjectCast<T>(move_objects.at(index));
+    std::shared_ptr<T> GetDomainHandler(std::size_t index) const {
+        return std::static_pointer_cast<T>(manager->DomainHandler(index));
     }
 
-    void AddMoveObject(std::shared_ptr<Object> object) {
-        move_objects.emplace_back(std::move(object));
-    }
-
-    void AddCopyObject(std::shared_ptr<Object> object) {
-        copy_objects.emplace_back(std::move(object));
-    }
-
-    void AddDomainObject(std::shared_ptr<SessionRequestHandler> object) {
-        domain_objects.emplace_back(std::move(object));
-    }
-
-    template <typename T>
-    std::shared_ptr<T> GetDomainRequestHandler(std::size_t index) const {
-        return std::static_pointer_cast<T>(domain_request_handlers.at(index));
-    }
-
-    void SetDomainRequestHandlers(
-        const std::vector<std::shared_ptr<SessionRequestHandler>>& handlers) {
-        domain_request_handlers = handlers;
-    }
-
-    /// Clears the list of objects so that no lingering objects are written accidentally to the
-    /// response buffer.
-    void ClearIncomingObjects() {
-        move_objects.clear();
-        copy_objects.clear();
-        domain_objects.clear();
-    }
-
-    std::size_t NumMoveObjects() const {
-        return move_objects.size();
-    }
-
-    std::size_t NumCopyObjects() const {
-        return copy_objects.size();
-    }
-
-    std::size_t NumDomainObjects() const {
-        return domain_objects.size();
+    void SetSessionRequestManager(std::shared_ptr<SessionRequestManager> manager_) {
+        manager = std::move(manager_);
     }
 
     std::string Description() const;
 
-    Thread& GetThread() {
-        return *thread;
-    }
-
-    const Thread& GetThread() const {
+    KThread& GetThread() {
         return *thread;
     }
 
@@ -276,15 +329,18 @@ public:
 private:
     friend class IPC::ResponseBuilder;
 
-    void ParseCommandBuffer(const HandleTable& handle_table, u32_le* src_cmdbuf, bool incoming);
+    void ParseCommandBuffer(const KHandleTable& handle_table, u32_le* src_cmdbuf, bool incoming);
 
     std::array<u32, IPC::COMMAND_BUFFER_LENGTH> cmd_buf;
-    std::shared_ptr<Kernel::ServerSession> server_session;
-    std::shared_ptr<Thread> thread;
-    // TODO(yuriks): Check common usage of this and optimize size accordingly
-    boost::container::small_vector<std::shared_ptr<Object>, 8> move_objects;
-    boost::container::small_vector<std::shared_ptr<Object>, 8> copy_objects;
-    boost::container::small_vector<std::shared_ptr<SessionRequestHandler>, 8> domain_objects;
+    Kernel::KServerSession* server_session{};
+    KThread* thread;
+
+    std::vector<Handle> incoming_move_handles;
+    std::vector<Handle> incoming_copy_handles;
+
+    std::vector<KAutoObject*> outgoing_move_objects;
+    std::vector<KAutoObject*> outgoing_copy_objects;
+    std::vector<SessionRequestHandlerPtr> outgoing_domain_objects;
 
     std::optional<IPC::CommandHeader> command_header;
     std::optional<IPC::HandleDescriptorHeader> handle_descriptor_header;
@@ -296,11 +352,14 @@ private:
     std::vector<IPC::BufferDescriptorABW> buffer_w_desciptors;
     std::vector<IPC::BufferDescriptorC> buffer_c_desciptors;
 
-    unsigned data_payload_offset{};
-    unsigned buffer_c_offset{};
     u32_le command{};
+    u64 pid{};
+    u32 write_size{};
+    u32 data_payload_offset{};
+    u32 handles_offset{};
+    u32 domain_offset{};
 
-    std::vector<std::shared_ptr<SessionRequestHandler>> domain_request_handlers;
+    std::shared_ptr<SessionRequestManager> manager;
     bool is_thread_waiting{};
 
     KernelCore& kernel;

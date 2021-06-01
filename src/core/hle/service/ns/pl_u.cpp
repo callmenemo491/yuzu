@@ -7,9 +7,7 @@
 #include <vector>
 
 #include "common/assert.h"
-#include "common/common_paths.h"
 #include "common/common_types.h"
-#include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/swap.h"
 #include "core/core.h"
@@ -19,9 +17,9 @@
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/system_archive/system_archive.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_shared_memory.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_memory.h"
-#include "core/hle/kernel/shared_memory.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/ns/pl_u.h"
 
@@ -65,13 +63,18 @@ static void DecryptSharedFont(const std::vector<u32>& input, Kernel::PhysicalMem
 void DecryptSharedFontToTTF(const std::vector<u32>& input, std::vector<u8>& output) {
     ASSERT_MSG(input[0] == EXPECTED_MAGIC, "Failed to derive key, unexpected magic number");
 
+    if (input.size() < 2) {
+        LOG_ERROR(Service_NS, "Input font is empty");
+        return;
+    }
+
     const u32 KEY = input[0] ^ EXPECTED_RESULT; // Derive key using an inverse xor
     std::vector<u32> transformed_font(input.size());
     // TODO(ogniK): Figure out a better way to do this
     std::transform(input.begin(), input.end(), transformed_font.begin(),
                    [&KEY](u32 font_data) { return Common::swap32(font_data ^ KEY); });
-    transformed_font[1] = Common::swap32(transformed_font[1]) ^ KEY; // "re-encrypt" the size
-    std::memcpy(output.data(), transformed_font.data() + 2, transformed_font.size() * sizeof(u32));
+    std::memcpy(output.data(), transformed_font.data() + 2,
+                (transformed_font.size() - 2) * sizeof(u32));
 }
 
 void EncryptSharedFont(const std::vector<u32>& input, std::vector<u8>& output,
@@ -125,9 +128,6 @@ struct PL_U::Impl {
         }
     }
 
-    /// Handle to shared memory region designated for a shared font
-    std::shared_ptr<Kernel::SharedMemory> shared_font_mem;
-
     /// Backing memory for the shared font data
     std::shared_ptr<Kernel::PhysicalMemory> shared_font;
 
@@ -149,6 +149,10 @@ PL_U::PL_U(Core::System& system_)
         {100, nullptr, "RequestApplicationFunctionAuthorization"},
         {101, nullptr, "RequestApplicationFunctionAuthorizationByProcessId"},
         {102, nullptr, "RequestApplicationFunctionAuthorizationByApplicationId"},
+        {103, nullptr, "RefreshApplicationFunctionBlackListDebugRecord"},
+        {104, nullptr, "RequestApplicationFunctionAuthorizationByProgramId"},
+        {105, nullptr, "GetFunctionBlackListSystemVersionToAuthorize"},
+        {106, nullptr, "GetFunctionBlackListVersion"},
         {1000, nullptr, "LoadNgWordDataForPlatformRegionChina"},
         {1001, nullptr, "GetNgWordDataSizeForPlatformRegionChina"},
     };
@@ -251,14 +255,13 @@ void PL_U::GetSharedMemoryNativeHandle(Kernel::HLERequestContext& ctx) {
 
     // Create shared font memory object
     auto& kernel = system.Kernel();
-    impl->shared_font_mem = SharedFrom(&kernel.GetFontSharedMem());
 
-    std::memcpy(impl->shared_font_mem->GetPointer(), impl->shared_font->data(),
+    std::memcpy(kernel.GetFontSharedMem().GetPointer(), impl->shared_font->data(),
                 impl->shared_font->size());
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(impl->shared_font_mem);
+    rb.PushCopyObjects(&kernel.GetFontSharedMem());
 }
 
 void PL_U::GetSharedFontInOrderOfPriority(Kernel::HLERequestContext& ctx) {

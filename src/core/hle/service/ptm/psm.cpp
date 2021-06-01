@@ -5,12 +5,117 @@
 #include <memory>
 
 #include "common/logging/log.h"
+#include "core/core.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
+#include "core/hle/kernel/kernel.h"
 #include "core/hle/service/ptm/psm.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
 
 namespace Service::PSM {
+
+class IPsmSession final : public ServiceFramework<IPsmSession> {
+public:
+    explicit IPsmSession(Core::System& system_)
+        : ServiceFramework{system_, "IPsmSession"}, state_change_event{system.Kernel()} {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {0, &IPsmSession::BindStateChangeEvent, "BindStateChangeEvent"},
+            {1, &IPsmSession::UnbindStateChangeEvent, "UnbindStateChangeEvent"},
+            {2, &IPsmSession::SetChargerTypeChangeEventEnabled, "SetChargerTypeChangeEventEnabled"},
+            {3, &IPsmSession::SetPowerSupplyChangeEventEnabled, "SetPowerSupplyChangeEventEnabled"},
+            {4, &IPsmSession::SetBatteryVoltageStateChangeEventEnabled, "SetBatteryVoltageStateChangeEventEnabled"},
+        };
+        // clang-format on
+
+        RegisterHandlers(functions);
+
+        Kernel::KAutoObject::Create(std::addressof(state_change_event));
+        state_change_event.Initialize("IPsmSession::state_change_event");
+    }
+
+    ~IPsmSession() override = default;
+
+    void SignalChargerTypeChanged() {
+        if (should_signal && should_signal_charger_type) {
+            state_change_event.GetWritableEvent().Signal();
+        }
+    }
+
+    void SignalPowerSupplyChanged() {
+        if (should_signal && should_signal_power_supply) {
+            state_change_event.GetWritableEvent().Signal();
+        }
+    }
+
+    void SignalBatteryVoltageStateChanged() {
+        if (should_signal && should_signal_battery_voltage) {
+            state_change_event.GetWritableEvent().Signal();
+        }
+    }
+
+private:
+    void BindStateChangeEvent(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PSM, "called");
+
+        should_signal = true;
+
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(RESULT_SUCCESS);
+        rb.PushCopyObjects(state_change_event.GetReadableEvent());
+    }
+
+    void UnbindStateChangeEvent(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PSM, "called");
+
+        should_signal = false;
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void SetChargerTypeChangeEventEnabled(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto state = rp.Pop<bool>();
+        LOG_DEBUG(Service_PSM, "called, state={}", state);
+
+        should_signal_charger_type = state;
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void SetPowerSupplyChangeEventEnabled(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto state = rp.Pop<bool>();
+        LOG_DEBUG(Service_PSM, "called, state={}", state);
+
+        should_signal_power_supply = state;
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void SetBatteryVoltageStateChangeEventEnabled(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto state = rp.Pop<bool>();
+        LOG_DEBUG(Service_PSM, "called, state={}", state);
+
+        should_signal_battery_voltage = state;
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    bool should_signal_charger_type{};
+    bool should_signal_power_supply{};
+    bool should_signal_battery_voltage{};
+    bool should_signal{};
+    Kernel::KEvent state_change_event;
+};
 
 class PSM final : public ServiceFramework<PSM> {
 public:
@@ -24,7 +129,7 @@ public:
             {4, nullptr, "IsBatteryChargingEnabled"},
             {5, nullptr, "AcquireControllerPowerSupply"},
             {6, nullptr, "ReleaseControllerPowerSupply"},
-            {7, nullptr, "OpenSession"},
+            {7, &PSM::OpenSession, "OpenSession"},
             {8, nullptr, "EnableEnoughPowerChargeEmulation"},
             {9, nullptr, "DisableEnoughPowerChargeEmulation"},
             {10, nullptr, "EnableFastBatteryCharging"},
@@ -59,6 +164,14 @@ private:
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.PushEnum(charger_type);
+    }
+
+    void OpenSession(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_PSM, "called");
+
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(RESULT_SUCCESS);
+        rb.PushIpcInterface<IPsmSession>(system);
     }
 
     enum class ChargerType : u32 {

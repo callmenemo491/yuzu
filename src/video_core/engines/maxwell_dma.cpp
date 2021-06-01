@@ -4,8 +4,8 @@
 
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/core.h"
-#include "core/settings.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/memory_manager.h"
@@ -59,9 +59,6 @@ void MaxwellDMA::Launch() {
         UNREACHABLE_MSG("Tiled->Tiled DMA transfers are not yet implemented");
         return;
     }
-
-    // All copies here update the main memory, so mark all rasterizer states as invalid.
-    system.GPU().Maxwell3D().OnMemoryWrite();
 
     if (is_src_pitch && is_dst_pitch) {
         CopyPitchToPitch();

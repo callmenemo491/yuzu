@@ -27,58 +27,58 @@ enum class SourceFlag : u32 {
 DECLARE_ENUM_FLAG_OPERATORS(SourceFlag);
 
 struct MiiInfo {
-    Common::UUID uuid{Common::INVALID_UUID};
-    std::array<char16_t, 11> name{};
-    u8 font_region{};
-    u8 favorite_color{};
-    u8 gender{};
-    u8 height{};
-    u8 build{};
-    u8 type{};
-    u8 region_move{};
-    u8 faceline_type{};
-    u8 faceline_color{};
-    u8 faceline_wrinkle{};
-    u8 faceline_make{};
-    u8 hair_type{};
-    u8 hair_color{};
-    u8 hair_flip{};
-    u8 eye_type{};
-    u8 eye_color{};
-    u8 eye_scale{};
-    u8 eye_aspect{};
-    u8 eye_rotate{};
-    u8 eye_x{};
-    u8 eye_y{};
-    u8 eyebrow_type{};
-    u8 eyebrow_color{};
-    u8 eyebrow_scale{};
-    u8 eyebrow_aspect{};
-    u8 eyebrow_rotate{};
-    u8 eyebrow_x{};
-    u8 eyebrow_y{};
-    u8 nose_type{};
-    u8 nose_scale{};
-    u8 nose_y{};
-    u8 mouth_type{};
-    u8 mouth_color{};
-    u8 mouth_scale{};
-    u8 mouth_aspect{};
-    u8 mouth_y{};
-    u8 beard_color{};
-    u8 beard_type{};
-    u8 mustache_type{};
-    u8 mustache_scale{};
-    u8 mustache_y{};
-    u8 glasses_type{};
-    u8 glasses_color{};
-    u8 glasses_scale{};
-    u8 glasses_y{};
-    u8 mole_type{};
-    u8 mole_scale{};
-    u8 mole_x{};
-    u8 mole_y{};
-    INSERT_PADDING_BYTES(1);
+    Common::UUID uuid;
+    std::array<char16_t, 11> name;
+    u8 font_region;
+    u8 favorite_color;
+    u8 gender;
+    u8 height;
+    u8 build;
+    u8 type;
+    u8 region_move;
+    u8 faceline_type;
+    u8 faceline_color;
+    u8 faceline_wrinkle;
+    u8 faceline_make;
+    u8 hair_type;
+    u8 hair_color;
+    u8 hair_flip;
+    u8 eye_type;
+    u8 eye_color;
+    u8 eye_scale;
+    u8 eye_aspect;
+    u8 eye_rotate;
+    u8 eye_x;
+    u8 eye_y;
+    u8 eyebrow_type;
+    u8 eyebrow_color;
+    u8 eyebrow_scale;
+    u8 eyebrow_aspect;
+    u8 eyebrow_rotate;
+    u8 eyebrow_x;
+    u8 eyebrow_y;
+    u8 nose_type;
+    u8 nose_scale;
+    u8 nose_y;
+    u8 mouth_type;
+    u8 mouth_color;
+    u8 mouth_scale;
+    u8 mouth_aspect;
+    u8 mouth_y;
+    u8 beard_color;
+    u8 beard_type;
+    u8 mustache_type;
+    u8 mustache_scale;
+    u8 mustache_y;
+    u8 glasses_type;
+    u8 glasses_color;
+    u8 glasses_scale;
+    u8 glasses_y;
+    u8 mole_type;
+    u8 mole_scale;
+    u8 mole_x;
+    u8 mole_y;
+    u8 padding;
 
     std::u16string Name() const;
 };
@@ -89,7 +89,7 @@ static_assert(std::has_unique_object_representations_v<MiiInfo>,
 #pragma pack(push, 4)
 
 struct MiiInfoElement {
-    MiiInfoElement(const MiiInfo& info, Source source) : info{info}, source{source} {}
+    MiiInfoElement(const MiiInfo& info_, Source source_) : info{info_}, source{source_} {}
 
     MiiInfo info{};
     Source source{};
@@ -233,7 +233,7 @@ struct RandomMiiData4 {
     Age age{};
     Race race{};
     u32 values_count{};
-    std::array<u8, 0xbc> values{};
+    std::array<u32, 47> values{};
 };
 static_assert(sizeof(RandomMiiData4) == 0xcc, "RandomMiiData4 has incorrect size.");
 
@@ -241,14 +241,14 @@ struct RandomMiiData3 {
     u32 arg_1;
     u32 arg_2;
     u32 values_count;
-    std::array<u8, 0xbc> values{};
+    std::array<u32, 47> values{};
 };
 static_assert(sizeof(RandomMiiData3) == 0xc8, "RandomMiiData3 has incorrect size.");
 
 struct RandomMiiData2 {
     u32 arg_1;
     u32 values_count;
-    std::array<u8, 0xbc> values{};
+    std::array<u32, 47> values{};
 };
 static_assert(sizeof(RandomMiiData2) == 0xc4, "RandomMiiData2 has incorrect size.");
 
@@ -324,7 +324,7 @@ public:
     ResultCode GetIndex(const MiiInfo& info, u32& index);
 
 private:
-    const Common::UUID user_id;
+    const Common::UUID user_id{Common::INVALID_UUID};
     u64 update_counter{};
 };
 

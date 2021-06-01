@@ -8,8 +8,8 @@
 
 #include "audio_core/sink.h"
 #include "audio_core/sink_details.h"
+#include "common/settings.h"
 #include "core/core.h"
-#include "core/settings.h"
 #include "ui_configure_audio.h"
 #include "yuzu/configuration/configuration_shared.h"
 #include "yuzu/configuration/configure_audio.h"
@@ -99,6 +99,9 @@ void ConfigureAudio::SetVolumeIndicatorText(int percentage) {
 }
 
 void ConfigureAudio::ApplyConfiguration() {
+    ConfigurationShared::ApplyPerGameSetting(&Settings::values.enable_audio_stretching,
+                                             ui->toggle_audio_stretching, enable_audio_stretching);
+
     if (Settings::IsConfiguringGlobal()) {
         Settings::values.sink_id =
             ui->output_sink_combo_box->itemText(ui->output_sink_combo_box->currentIndex())
@@ -108,19 +111,12 @@ void ConfigureAudio::ApplyConfiguration() {
                 .toStdString();
 
         // Guard if during game and set to game-specific value
-        if (Settings::values.enable_audio_stretching.UsingGlobal()) {
-            Settings::values.enable_audio_stretching.SetValue(
-                ui->toggle_audio_stretching->isChecked());
-        }
         if (Settings::values.volume.UsingGlobal()) {
             Settings::values.volume.SetValue(
                 static_cast<float>(ui->volume_slider->sliderPosition()) /
                 ui->volume_slider->maximum());
         }
     } else {
-        ConfigurationShared::ApplyPerGameSetting(&Settings::values.enable_audio_stretching,
-                                                 ui->toggle_audio_stretching,
-                                                 enable_audio_stretching);
         if (ui->volume_combo_box->currentIndex() == 0) {
             Settings::values.volume.SetGlobal(true);
         } else {

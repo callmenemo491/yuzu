@@ -2,15 +2,15 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/nifm/nifm.h"
 #include "core/hle/service/service.h"
 #include "core/network/network.h"
-#include "core/settings.h"
 
 namespace Service::NIFM {
 
@@ -20,6 +20,93 @@ enum class RequestState : u32 {
     Pending = 2,
     Connected = 3,
 };
+
+struct IpAddressSetting {
+    bool is_automatic{};
+    Network::IPv4Address current_address{};
+    Network::IPv4Address subnet_mask{};
+    Network::IPv4Address gateway{};
+};
+static_assert(sizeof(IpAddressSetting) == 0xD, "IpAddressSetting has incorrect size.");
+
+struct DnsSetting {
+    bool is_automatic{};
+    Network::IPv4Address primary_dns{};
+    Network::IPv4Address secondary_dns{};
+};
+static_assert(sizeof(DnsSetting) == 0x9, "DnsSetting has incorrect size.");
+
+struct ProxySetting {
+    bool enabled{};
+    INSERT_PADDING_BYTES(1);
+    u16 port{};
+    std::array<char, 0x64> proxy_server{};
+    bool automatic_auth_enabled{};
+    std::array<char, 0x20> user{};
+    std::array<char, 0x20> password{};
+    INSERT_PADDING_BYTES(1);
+};
+static_assert(sizeof(ProxySetting) == 0xAA, "ProxySetting has incorrect size.");
+
+struct IpSettingData {
+    IpAddressSetting ip_address_setting{};
+    DnsSetting dns_setting{};
+    ProxySetting proxy_setting{};
+    u16 mtu{};
+};
+static_assert(sizeof(IpSettingData) == 0xC2, "IpSettingData has incorrect size.");
+
+struct SfWirelessSettingData {
+    u8 ssid_length{};
+    std::array<char, 0x20> ssid{};
+    u8 unknown_1{};
+    u8 unknown_2{};
+    u8 unknown_3{};
+    std::array<char, 0x41> passphrase{};
+};
+static_assert(sizeof(SfWirelessSettingData) == 0x65, "SfWirelessSettingData has incorrect size.");
+
+struct NifmWirelessSettingData {
+    u8 ssid_length{};
+    std::array<char, 0x21> ssid{};
+    u8 unknown_1{};
+    INSERT_PADDING_BYTES(1);
+    u32 unknown_2{};
+    u32 unknown_3{};
+    std::array<char, 0x41> passphrase{};
+    INSERT_PADDING_BYTES(3);
+};
+static_assert(sizeof(NifmWirelessSettingData) == 0x70,
+              "NifmWirelessSettingData has incorrect size.");
+
+#pragma pack(push, 1)
+struct SfNetworkProfileData {
+    IpSettingData ip_setting_data{};
+    u128 uuid{};
+    std::array<char, 0x40> network_name{};
+    u8 unknown_1{};
+    u8 unknown_2{};
+    u8 unknown_3{};
+    u8 unknown_4{};
+    SfWirelessSettingData wireless_setting_data{};
+    INSERT_PADDING_BYTES(1);
+};
+static_assert(sizeof(SfNetworkProfileData) == 0x17C, "SfNetworkProfileData has incorrect size.");
+
+struct NifmNetworkProfileData {
+    u128 uuid{};
+    std::array<char, 0x40> network_name{};
+    u32 unknown_1{};
+    u32 unknown_2{};
+    u8 unknown_3{};
+    u8 unknown_4{};
+    INSERT_PADDING_BYTES(2);
+    NifmWirelessSettingData wireless_setting_data{};
+    IpSettingData ip_setting_data{};
+};
+static_assert(sizeof(NifmNetworkProfileData) == 0x18E,
+              "NifmNetworkProfileData has incorrect size.");
+#pragma pack(pop)
 
 class IScanRequest final : public ServiceFramework<IScanRequest> {
 public:
@@ -40,7 +127,8 @@ public:
 
 class IRequest final : public ServiceFramework<IRequest> {
 public:
-    explicit IRequest(Core::System& system_) : ServiceFramework{system_, "IRequest"} {
+    explicit IRequest(Core::System& system_)
+        : ServiceFramework{system_, "IRequest"}, event1{system.Kernel()}, event2{system.Kernel()} {
         static const FunctionInfo functions[] = {
             {0, &IRequest::GetRequestState, "GetRequestState"},
             {1, &IRequest::GetResult, "GetResult"},
@@ -70,9 +158,11 @@ public:
         };
         RegisterHandlers(functions);
 
-        auto& kernel = system.Kernel();
-        event1 = Kernel::WritableEvent::CreateEventPair(kernel, "IRequest:Event1");
-        event2 = Kernel::WritableEvent::CreateEventPair(kernel, "IRequest:Event2");
+        Kernel::KAutoObject::Create(std::addressof(event1));
+        Kernel::KAutoObject::Create(std::addressof(event2));
+
+        event1.Initialize("IRequest:Event1");
+        event2.Initialize("IRequest:Event2");
     }
 
 private:
@@ -108,7 +198,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 2};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(event1.readable, event2.readable);
+        rb.PushCopyObjects(event1.GetReadableEvent(), event2.GetReadableEvent());
     }
 
     void Cancel(Kernel::HLERequestContext& ctx) {
@@ -128,14 +218,18 @@ private:
     void GetAppletInfo(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_NIFM, "(STUBBED) called");
 
-        IPC::ResponseBuilder rb{ctx, 8};
+        std::vector<u8> out_buffer(ctx.GetWriteBufferSize());
+
+        ctx.WriteBuffer(out_buffer);
+
+        IPC::ResponseBuilder rb{ctx, 5};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(0);
         rb.Push<u32>(0);
         rb.Push<u32>(0);
     }
 
-    Kernel::EventPair event1, event2;
+    Kernel::KEvent event1, event2;
 };
 
 class INetworkProfile final : public ServiceFramework<INetworkProfile> {
@@ -179,6 +273,46 @@ private:
         rb.Push(RESULT_SUCCESS);
         rb.PushIpcInterface<IRequest>(system);
     }
+    void GetCurrentNetworkProfile(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        const SfNetworkProfileData network_profile_data{
+            .ip_setting_data{
+                .ip_address_setting{
+                    .is_automatic{true},
+                    .current_address{192, 168, 1, 100},
+                    .subnet_mask{255, 255, 255, 0},
+                    .gateway{192, 168, 1, 1},
+                },
+                .dns_setting{
+                    .is_automatic{true},
+                    .primary_dns{1, 1, 1, 1},
+                    .secondary_dns{1, 0, 0, 1},
+                },
+                .proxy_setting{
+                    .enabled{false},
+                    .port{},
+                    .proxy_server{},
+                    .automatic_auth_enabled{},
+                    .user{},
+                    .password{},
+                },
+                .mtu{1500},
+            },
+            .uuid{0xdeadbeef, 0xdeadbeef},
+            .network_name{"yuzu Network"},
+            .wireless_setting_data{
+                .ssid_length{12},
+                .ssid{"yuzu Network"},
+                .passphrase{"yuzupassword"},
+            },
+        };
+
+        ctx.WriteBuffer(network_profile_data);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
     void RemoveNetworkProfile(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_NIFM, "(STUBBED) called");
 
@@ -209,6 +343,34 @@ private:
         rb.Push(RESULT_SUCCESS);
         rb.PushIpcInterface<INetworkProfile>(system);
         rb.PushRaw<u128>(uuid);
+    }
+    void GetCurrentIpConfigInfo(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        struct IpConfigInfo {
+            IpAddressSetting ip_address_setting;
+            DnsSetting dns_setting;
+        };
+        static_assert(sizeof(IpConfigInfo) == sizeof(IpAddressSetting) + sizeof(DnsSetting),
+                      "IpConfigInfo has incorrect size.");
+
+        const IpConfigInfo ip_config_info{
+            .ip_address_setting{
+                .is_automatic{true},
+                .current_address{192, 168, 1, 100},
+                .subnet_mask{255, 255, 255, 0},
+                .gateway{192, 168, 1, 1},
+            },
+            .dns_setting{
+                .is_automatic{true},
+                .primary_dns{1, 1, 1, 1},
+                .secondary_dns{1, 0, 0, 1},
+            },
+        };
+
+        IPC::ResponseBuilder rb{ctx, 2 + (sizeof(IpConfigInfo) + 3) / sizeof(u32)};
+        rb.Push(RESULT_SUCCESS);
+        rb.PushRaw<IpConfigInfo>(ip_config_info);
     }
     void IsWirelessCommunicationEnabled(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_NIFM, "(STUBBED) called");
@@ -248,7 +410,7 @@ IGeneralService::IGeneralService(Core::System& system_)
         {1, &IGeneralService::GetClientId, "GetClientId"},
         {2, &IGeneralService::CreateScanRequest, "CreateScanRequest"},
         {4, &IGeneralService::CreateRequest, "CreateRequest"},
-        {5, nullptr, "GetCurrentNetworkProfile"},
+        {5, &IGeneralService::GetCurrentNetworkProfile, "GetCurrentNetworkProfile"},
         {6, nullptr, "EnumerateNetworkInterfaces"},
         {7, nullptr, "EnumerateNetworkProfiles"},
         {8, nullptr, "GetNetworkProfile"},
@@ -258,7 +420,7 @@ IGeneralService::IGeneralService(Core::System& system_)
         {12, &IGeneralService::GetCurrentIpAddress, "GetCurrentIpAddress"},
         {13, nullptr, "GetCurrentAccessPointOld"},
         {14, &IGeneralService::CreateTemporaryNetworkProfile, "CreateTemporaryNetworkProfile"},
-        {15, nullptr, "GetCurrentIpConfigInfo"},
+        {15, &IGeneralService::GetCurrentIpConfigInfo, "GetCurrentIpConfigInfo"},
         {16, nullptr, "SetWirelessCommunicationEnabled"},
         {17, &IGeneralService::IsWirelessCommunicationEnabled, "IsWirelessCommunicationEnabled"},
         {18, nullptr, "GetInternetConnectionStatus"},

@@ -6,10 +6,10 @@
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_thread.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/thread.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/nvdrv/interface.h"
 #include "core/hle/service/nvdrv/nvdata.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
@@ -22,19 +22,30 @@ void NVDRV::SignalGPUInterruptSyncpt(const u32 syncpoint_id, const u32 value) {
 
 void NVDRV::Open(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_NVDRV, "called");
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(RESULT_SUCCESS);
 
     if (!is_initialized) {
-        ServiceError(ctx, NvResult::NotInitialized);
+        rb.Push<DeviceFD>(0);
+        rb.PushEnum(NvResult::NotInitialized);
+
         LOG_ERROR(Service_NVDRV, "NvServices is not initalized!");
         return;
     }
 
     const auto& buffer = ctx.ReadBuffer();
     const std::string device_name(buffer.begin(), buffer.end());
+
+    if (device_name == "/dev/nvhost-prof-gpu") {
+        rb.Push<DeviceFD>(0);
+        rb.PushEnum(NvResult::NotSupported);
+
+        LOG_WARNING(Service_NVDRV, "/dev/nvhost-prof-gpu cannot be opened in production");
+        return;
+    }
+
     DeviceFD fd = nvdrv->Open(device_name);
 
-    IPC::ResponseBuilder rb{ctx, 4};
-    rb.Push(RESULT_SUCCESS);
     rb.Push<DeviceFD>(fd);
     rb.PushEnum(fd != INVALID_NVDRV_FD ? NvResult::Success : NvResult::FileOperationFailed);
 }
@@ -176,8 +187,8 @@ void NVDRV::QueryEvent(Kernel::HLERequestContext& ctx) {
     if (event_id < MaxNvEvents) {
         IPC::ResponseBuilder rb{ctx, 3, 1};
         rb.Push(RESULT_SUCCESS);
-        auto event = nvdrv->GetEvent(event_id);
-        event->Clear();
+        auto& event = nvdrv->GetEvent(event_id);
+        event.Clear();
         rb.PushCopyObjects(event);
         rb.PushEnum(NvResult::Success);
     } else {

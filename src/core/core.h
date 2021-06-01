@@ -12,7 +12,6 @@
 
 #include "common/common_types.h"
 #include "core/file_sys/vfs_types.h"
-#include "core/hle/kernel/object.h"
 
 namespace Core::Frontend {
 class EmuWindow;
@@ -29,7 +28,7 @@ namespace Kernel {
 class GlobalSchedulerContext;
 class KernelCore;
 class PhysicalCore;
-class Process;
+class KProcess;
 class KScheduler;
 } // namespace Kernel
 
@@ -61,10 +60,6 @@ class FileSystemController;
 namespace Glue {
 class ARPManager;
 }
-
-namespace LM {
-class Manager;
-} // namespace LM
 
 namespace SM {
 class ServiceManager;
@@ -268,10 +263,10 @@ public:
     [[nodiscard]] const Core::DeviceMemory& DeviceMemory() const;
 
     /// Provides a pointer to the current process
-    [[nodiscard]] Kernel::Process* CurrentProcess();
+    [[nodiscard]] Kernel::KProcess* CurrentProcess();
 
     /// Provides a constant pointer to the current process.
-    [[nodiscard]] const Kernel::Process* CurrentProcess() const;
+    [[nodiscard]] const Kernel::KProcess* CurrentProcess() const;
 
     /// Provides a reference to the core timing instance.
     [[nodiscard]] Timing::CoreTiming& CoreTiming();
@@ -351,9 +346,6 @@ public:
     [[nodiscard]] Service::APM::Controller& GetAPMController();
     [[nodiscard]] const Service::APM::Controller& GetAPMController() const;
 
-    [[nodiscard]] Service::LM::Manager& GetLogManager();
-    [[nodiscard]] const Service::LM::Manager& GetLogManager() const;
-
     [[nodiscard]] Service::Time::TimeManager& GetTimeManager();
     [[nodiscard]] const Service::Time::TimeManager& GetTimeManager() const;
 
@@ -394,6 +386,9 @@ public:
      * @param program_index Specifies the index within the application of the program to launch.
      */
     void ExecuteProgram(std::size_t program_index);
+
+    /// Applies any changes to settings to this core instance.
+    void ApplySettings();
 
 private:
     System();

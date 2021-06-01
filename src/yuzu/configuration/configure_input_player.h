@@ -14,7 +14,7 @@
 #include <QWidget>
 
 #include "common/param_package.h"
-#include "core/settings.h"
+#include "common/settings.h"
 #include "ui_configure_input.h"
 
 class QCheckBox;
@@ -53,6 +53,18 @@ public:
 
     /// Save all button configurations to settings file.
     void ApplyConfiguration();
+
+    /**
+     * Attempts to connect the currently selected controller in the HID backend.
+     * This function will not do anything if it is not connected in the frontend.
+     */
+    void TryConnectSelectedController();
+
+    /**
+     * Attempts to disconnect the currently selected controller in the HID backend.
+     * This function will not do anything if the configuration has not changed.
+     */
+    void TryDisconnectSelectedController();
 
     /// Set the connection state checkbox (used to sync state).
     void ConnectPlayer(bool connected);
@@ -94,7 +106,7 @@ private:
     void LoadConfiguration();
 
     /// Called when the button was pressed.
-    void HandleClick(QPushButton* button,
+    void HandleClick(QPushButton* button, std::size_t button_id,
                      std::function<void(const Common::ParamPackage&)> new_input_setter,
                      InputCommon::Polling::DeviceType type);
 
@@ -131,8 +143,14 @@ private:
     /// Hides and disables controller settings based on the current controller type.
     void UpdateControllerAvailableButtons();
 
+    /// Disables controller settings based on the current controller type.
+    void UpdateControllerEnabledButtons();
+
     /// Shows or hides motion groupboxes based on the current controller type.
     void UpdateMotionButtons();
+
+    /// Alters the button names based on the current controller type.
+    void UpdateControllerButtonNames();
 
     /// Gets the default controller mapping for this device and auto configures the input to match.
     void UpdateMappingWithDefaults();

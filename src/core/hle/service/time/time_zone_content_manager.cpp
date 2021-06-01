@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "common/time_zone.h"
 #include "core/core.h"
 #include "core/file_sys/content_archive.h"
@@ -15,7 +16,6 @@
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/time/time_manager.h"
 #include "core/hle/service/time/time_zone_content_manager.h"
-#include "core/settings.h"
 
 namespace Service::Time::TimeZone {
 
@@ -68,8 +68,8 @@ static std::vector<std::string> BuildLocationNameCache(Core::System& system) {
     return location_name_cache;
 }
 
-TimeZoneContentManager::TimeZoneContentManager(Core::System& system)
-    : system{system}, location_name_cache{BuildLocationNameCache(system)} {}
+TimeZoneContentManager::TimeZoneContentManager(Core::System& system_)
+    : system{system_}, location_name_cache{BuildLocationNameCache(system)} {}
 
 void TimeZoneContentManager::Initialize(TimeManager& time_manager) {
     std::string location_name;

@@ -1,10 +1,12 @@
 set(SHADER_FILES
+    astc_decoder.comp
     block_linear_unswizzle_2d.comp
     block_linear_unswizzle_3d.comp
     convert_depth_to_float.frag
     convert_float_to_depth.frag
     full_screen_triangle.vert
     opengl_copy_bc4.comp
+    opengl_copy_bgra.comp
     opengl_present.frag
     opengl_present.vert
     pitch_unswizzle.comp
@@ -12,7 +14,6 @@ set(SHADER_FILES
     vulkan_blit_depth_stencil.frag
     vulkan_present.frag
     vulkan_present.vert
-    vulkan_quad_array.comp
     vulkan_quad_indexed.comp
     vulkan_uint8.comp
 )
@@ -20,6 +21,7 @@ set(SHADER_FILES
 find_program(GLSLANGVALIDATOR "glslangValidator" REQUIRED)
 
 set(GLSL_FLAGS "")
+set(QUIET_FLAG "--quiet")
 
 set(SHADER_INCLUDE ${CMAKE_CURRENT_BINARY_DIR}/include)
 set(SHADER_DIR ${SHADER_INCLUDE}/video_core/host_shaders)
@@ -27,6 +29,23 @@ set(HOST_SHADERS_INCLUDE ${SHADER_INCLUDE} PARENT_SCOPE)
 
 set(INPUT_FILE ${CMAKE_CURRENT_SOURCE_DIR}/source_shader.h.in)
 set(HEADER_GENERATOR ${CMAKE_CURRENT_SOURCE_DIR}/StringShaderHeader.cmake)
+
+# Check if `--quiet` is available on host's glslangValidator version
+# glslangValidator prints to STDERR iff an unrecognized flag is passed to it
+execute_process(
+    COMMAND
+        ${GLSLANGVALIDATOR} ${QUIET_FLAG}
+    ERROR_VARIABLE
+        GLSLANG_ERROR
+    # STDOUT variable defined to silence unnecessary output during CMake configuration
+    OUTPUT_VARIABLE
+        GLSLANG_OUTPUT
+)
+
+if (NOT GLSLANG_ERROR STREQUAL "")
+    message(WARNING "Refusing to use unavailable flag `${QUIET_FLAG}` on `${GLSLANGVALIDATOR}`")
+    set(QUIET_FLAG "")
+endif()
 
 foreach(FILENAME IN ITEMS ${SHADER_FILES})
     string(REPLACE "." "_" SHADER_NAME ${FILENAME})
@@ -55,7 +74,7 @@ foreach(FILENAME IN ITEMS ${SHADER_FILES})
             OUTPUT
                 ${SPIRV_HEADER_FILE}
             COMMAND
-                ${GLSLANGVALIDATOR} -V ${GLSL_FLAGS} --variable-name ${SPIRV_VARIABLE_NAME} -o ${SPIRV_HEADER_FILE} ${SOURCE_FILE}
+                ${GLSLANGVALIDATOR} -V ${QUIET_FLAG} ${GLSL_FLAGS} --variable-name ${SPIRV_VARIABLE_NAME} -o ${SPIRV_HEADER_FILE} ${SOURCE_FILE}
             MAIN_DEPENDENCY
                 ${SOURCE_FILE}
         )

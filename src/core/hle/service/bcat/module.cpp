@@ -7,18 +7,18 @@
 #include "backend/boxcat.h"
 #include "common/hex_util.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/file_sys/vfs.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/process.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/service/bcat/backend/backend.h"
 #include "core/hle/service/bcat/bcat.h"
 #include "core/hle/service/bcat/module.h"
 #include "core/hle/service/filesystem/filesystem.h"
-#include "core/settings.h"
 
 namespace Service::BCAT {
 
@@ -88,11 +88,9 @@ struct DeliveryCacheDirectoryEntry {
 
 class IDeliveryCacheProgressService final : public ServiceFramework<IDeliveryCacheProgressService> {
 public:
-    explicit IDeliveryCacheProgressService(Core::System& system_,
-                                           std::shared_ptr<Kernel::ReadableEvent> event_,
+    explicit IDeliveryCacheProgressService(Core::System& system_, Kernel::KReadableEvent& event_,
                                            const DeliveryCacheProgressImpl& impl_)
-        : ServiceFramework{system_, "IDeliveryCacheProgressService"}, event{std::move(event_)},
-          impl{impl_} {
+        : ServiceFramework{system_, "IDeliveryCacheProgressService"}, event{event_}, impl{impl_} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IDeliveryCacheProgressService::GetEvent, "GetEvent"},
@@ -121,7 +119,7 @@ private:
         rb.Push(RESULT_SUCCESS);
     }
 
-    std::shared_ptr<Kernel::ReadableEvent> event;
+    Kernel::KReadableEvent& event;
     const DeliveryCacheProgressImpl& impl;
 };
 
@@ -155,10 +153,12 @@ public:
             {30210, nullptr, "SetDeliveryTaskTimer"},
             {30300, nullptr, "RegisterSystemApplicationDeliveryTasks"},
             {90100, nullptr, "EnumerateBackgroundDeliveryTask"},
+            {90101, nullptr, "Unknown90101"},
             {90200, nullptr, "GetDeliveryList"},
             {90201, &IBcatService::ClearDeliveryCacheStorage, "ClearDeliveryCacheStorage"},
             {90202, nullptr, "ClearDeliveryTaskSubscriptionStatus"},
             {90300, nullptr, "GetPushNotificationLog"},
+            {90301, nullptr, "Unknown90301"},
         };
         // clang-format on
         RegisterHandlers(functions);
@@ -172,9 +172,9 @@ private:
     };
 
     std::shared_ptr<IDeliveryCacheProgressService> CreateProgressService(SyncType type) {
-        auto& backend{progress.at(static_cast<std::size_t>(type))};
-        return std::make_shared<IDeliveryCacheProgressService>(system, backend.GetEvent(),
-                                                               backend.GetImpl());
+        auto& progress_backend{GetProgressBackend(type)};
+        return std::make_shared<IDeliveryCacheProgressService>(system, progress_backend.GetEvent(),
+                                                               progress_backend.GetImpl());
     }
 
     void RequestSyncDeliveryCache(Kernel::HLERequestContext& ctx) {
@@ -182,7 +182,7 @@ private:
 
         backend.Synchronize({system.CurrentProcess()->GetTitleID(),
                              GetCurrentBuildID(system.GetCurrentProcessBuildID())},
-                            progress.at(static_cast<std::size_t>(SyncType::Normal)));
+                            GetProgressBackend(SyncType::Normal));
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
@@ -199,8 +199,7 @@ private:
 
         backend.SynchronizeDirectory({system.CurrentProcess()->GetTitleID(),
                                       GetCurrentBuildID(system.GetCurrentProcessBuildID())},
-                                     name,
-                                     progress.at(static_cast<std::size_t>(SyncType::Directory)));
+                                     name, GetProgressBackend(SyncType::Directory));
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(RESULT_SUCCESS);
@@ -263,9 +262,16 @@ private:
         rb.Push(RESULT_SUCCESS);
     }
 
-    Backend& backend;
+    ProgressServiceBackend& GetProgressBackend(SyncType type) {
+        return progress.at(static_cast<size_t>(type));
+    }
 
-    std::array<ProgressServiceBackend, static_cast<std::size_t>(SyncType::Count)> progress;
+    const ProgressServiceBackend& GetProgressBackend(SyncType type) const {
+        return progress.at(static_cast<size_t>(type));
+    }
+
+    Backend& backend;
+    std::array<ProgressServiceBackend, static_cast<size_t>(SyncType::Count)> progress;
 };
 
 void Module::Interface::CreateBcatService(Kernel::HLERequestContext& ctx) {

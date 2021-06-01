@@ -6,9 +6,9 @@
 
 namespace Service::Account {
 
-ACC_U0::ACC_U0(std::shared_ptr<Module> module, std::shared_ptr<ProfileManager> profile_manager,
-               Core::System& system)
-    : Module::Interface(std::move(module), std::move(profile_manager), system, "acc:u0") {
+ACC_U0::ACC_U0(std::shared_ptr<Module> module_, std::shared_ptr<ProfileManager> profile_manager_,
+               Core::System& system_)
+    : Interface(std::move(module_), std::move(profile_manager_), system_, "acc:u0") {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, &ACC_U0::GetUserCount, "GetUserCount"},
@@ -26,7 +26,7 @@ ACC_U0::ACC_U0(std::shared_ptr<Module> module, std::shared_ptr<ProfileManager> p
         {101, &ACC_U0::GetBaasAccountManagerForApplication, "GetBaasAccountManagerForApplication"},
         {102, nullptr, "AuthenticateApplicationAsync"},
         {103, nullptr, "CheckNetworkServiceAvailabilityAsync"}, // 4.0.0+
-        {110, nullptr, "StoreSaveDataThumbnail"},
+        {110, &ACC_U0::StoreSaveDataThumbnailApplication, "StoreSaveDataThumbnail"},
         {111, nullptr, "ClearSaveDataThumbnail"},
         {120, nullptr, "CreateGuestLoginRequest"},
         {130, &ACC_U0::LoadOpenContext, "LoadOpenContext"}, // 5.0.0+

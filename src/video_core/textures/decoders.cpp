@@ -17,26 +17,7 @@
 #include "video_core/textures/texture.h"
 
 namespace Tegra::Texture {
-
 namespace {
-/**
- * This table represents the internal swizzle of a gob, in format 16 bytes x 2 sector packing.
- * Calculates the offset of an (x, y) position within a swizzled texture.
- * Taken from the Tegra X1 Technical Reference Manual. pages 1187-1188
- */
-constexpr SwizzleTable MakeSwizzleTableConst() {
-    SwizzleTable table{};
-    for (u32 y = 0; y < table.size(); ++y) {
-        for (u32 x = 0; x < table[0].size(); ++x) {
-            table[y][x] = ((x % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 +
-                          (y % 2) * 16 + (x % 16);
-        }
-    }
-    return table;
-}
-
-constexpr SwizzleTable SWIZZLE_TABLE = MakeSwizzleTableConst();
-
 template <bool TO_LINEAR>
 void Swizzle(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixel, u32 width,
              u32 height, u32 depth, u32 block_height, u32 block_depth, u32 stride_alignment) {
@@ -49,7 +30,7 @@ void Swizzle(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixe
     // We can configure here a custom pitch
     // As it's not exposed 'width * bpp' will be the expected pitch.
     const u32 pitch = width * bytes_per_pixel;
-    const u32 stride = Common::AlignBits(width, stride_alignment) * bytes_per_pixel;
+    const u32 stride = Common::AlignUpLog2(width, stride_alignment) * bytes_per_pixel;
 
     const u32 gobs_in_x = Common::DivCeilLog2(stride, GOB_SIZE_X_SHIFT);
     const u32 block_size = gobs_in_x << (GOB_SIZE_SHIFT + block_height + block_depth);
@@ -90,10 +71,6 @@ void Swizzle(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixe
     }
 }
 } // Anonymous namespace
-
-SwizzleTable MakeSwizzleTable() {
-    return SWIZZLE_TABLE;
-}
 
 void UnswizzleTexture(std::span<u8> output, std::span<const u8> input, u32 bytes_per_pixel,
                       u32 width, u32 height, u32 depth, u32 block_height, u32 block_depth,
@@ -217,9 +194,9 @@ void SwizzleKepler(const u32 width, const u32 height, const u32 dst_x, const u32
 std::size_t CalculateSize(bool tiled, u32 bytes_per_pixel, u32 width, u32 height, u32 depth,
                           u32 block_height, u32 block_depth) {
     if (tiled) {
-        const u32 aligned_width = Common::AlignBits(width * bytes_per_pixel, GOB_SIZE_X_SHIFT);
-        const u32 aligned_height = Common::AlignBits(height, GOB_SIZE_Y_SHIFT + block_height);
-        const u32 aligned_depth = Common::AlignBits(depth, GOB_SIZE_Z_SHIFT + block_depth);
+        const u32 aligned_width = Common::AlignUpLog2(width * bytes_per_pixel, GOB_SIZE_X_SHIFT);
+        const u32 aligned_height = Common::AlignUpLog2(height, GOB_SIZE_Y_SHIFT + block_height);
+        const u32 aligned_depth = Common::AlignUpLog2(depth, GOB_SIZE_Z_SHIFT + block_depth);
         return aligned_width * aligned_height * aligned_depth;
     } else {
         return width * height * depth * bytes_per_pixel;

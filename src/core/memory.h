@@ -8,7 +8,6 @@
 #include <memory>
 #include <string>
 #include "common/common_types.h"
-#include "common/memory_hook.h"
 
 namespace Common {
 struct PageTable;
@@ -20,7 +19,7 @@ class System;
 
 namespace Kernel {
 class PhysicalMemory;
-class Process;
+class KProcess;
 } // namespace Kernel
 
 namespace Core::Memory {
@@ -60,11 +59,16 @@ public:
     Memory& operator=(Memory&&) = default;
 
     /**
+     * Resets the state of the Memory system.
+     */
+    void Reset();
+
+    /**
      * Changes the currently active page table to that of the given process instance.
      *
      * @param process The process to use the page table of.
      */
-    void SetCurrentPageTable(Kernel::Process& process, u32 core_id);
+    void SetCurrentPageTable(Kernel::KProcess& process, u32 core_id);
 
     /**
      * Maps an allocated buffer onto a region of the emulated process address space.
@@ -78,17 +82,6 @@ public:
     void MapMemoryRegion(Common::PageTable& page_table, VAddr base, u64 size, PAddr target);
 
     /**
-     * Maps a region of the emulated process address space as a IO region.
-     *
-     * @param page_table   The page table of the emulated process.
-     * @param base         The address to start mapping at. Must be page-aligned.
-     * @param size         The amount of bytes to map. Must be page-aligned.
-     * @param mmio_handler The handler that backs the mapping.
-     */
-    void MapIoRegion(Common::PageTable& page_table, VAddr base, u64 size,
-                     Common::MemoryHookPointer mmio_handler);
-
-    /**
      * Unmaps a region of the emulated process address space.
      *
      * @param page_table The page table of the emulated process.
@@ -96,28 +89,6 @@ public:
      * @param size       The amount of bytes to unmap.
      */
     void UnmapRegion(Common::PageTable& page_table, VAddr base, u64 size);
-
-    /**
-     * Adds a memory hook to intercept reads and writes to given region of memory.
-     *
-     * @param page_table The page table of the emulated process
-     * @param base       The starting address to apply the hook to.
-     * @param size       The size of the memory region to apply the hook to, in bytes.
-     * @param hook       The hook to apply to the region of memory.
-     */
-    void AddDebugHook(Common::PageTable& page_table, VAddr base, u64 size,
-                      Common::MemoryHookPointer hook);
-
-    /**
-     * Removes a memory hook from a given range of memory.
-     *
-     * @param page_table The page table of the emulated process.
-     * @param base       The starting address to remove the hook from.
-     * @param size       The size of the memory region to remove the hook from, in bytes.
-     * @param hook       The hook to remove from the specified region of memory.
-     */
-    void RemoveDebugHook(Common::PageTable& page_table, VAddr base, u64 size,
-                         Common::MemoryHookPointer hook);
 
     /**
      * Checks whether or not the supplied address is a valid virtual
@@ -128,7 +99,7 @@ public:
      *
      * @returns True if the given virtual address is valid, false otherwise.
      */
-    bool IsValidVirtualAddress(const Kernel::Process& process, VAddr vaddr) const;
+    bool IsValidVirtualAddress(const Kernel::KProcess& process, VAddr vaddr) const;
 
     /**
      * Checks whether or not the supplied address is a valid virtual
@@ -150,6 +121,11 @@ public:
      */
     u8* GetPointer(VAddr vaddr);
 
+    template <typename T>
+    T* GetPointer(VAddr vaddr) {
+        return reinterpret_cast<T*>(GetPointer(vaddr));
+    }
+
     /**
      * Gets a pointer to the given address.
      *
@@ -159,6 +135,11 @@ public:
      *          If the address is not valid, nullptr will be returned.
      */
     const u8* GetPointer(VAddr vaddr) const;
+
+    template <typename T>
+    const T* GetPointer(VAddr vaddr) const {
+        return reinterpret_cast<T*>(GetPointer(vaddr));
+    }
 
     /**
      * Reads an 8-bit unsigned value from the current process' address space
@@ -343,7 +324,7 @@ public:
      * @post The range [dest_buffer, size) contains the read bytes from the
      *       process' address space.
      */
-    void ReadBlock(const Kernel::Process& process, VAddr src_addr, void* dest_buffer,
+    void ReadBlock(const Kernel::KProcess& process, VAddr src_addr, void* dest_buffer,
                    std::size_t size);
 
     /**
@@ -364,7 +345,7 @@ public:
      * @post The range [dest_buffer, size) contains the read bytes from the
      *       process' address space.
      */
-    void ReadBlockUnsafe(const Kernel::Process& process, VAddr src_addr, void* dest_buffer,
+    void ReadBlockUnsafe(const Kernel::KProcess& process, VAddr src_addr, void* dest_buffer,
                          std::size_t size);
 
     /**
@@ -424,7 +405,7 @@ public:
      *       and will mark that region as invalidated to caches that the active
      *       graphics backend may be maintaining over the course of execution.
      */
-    void WriteBlock(const Kernel::Process& process, VAddr dest_addr, const void* src_buffer,
+    void WriteBlock(const Kernel::KProcess& process, VAddr dest_addr, const void* src_buffer,
                     std::size_t size);
 
     /**
@@ -444,7 +425,7 @@ public:
      *       will be ignored and an error will be logged.
      *
      */
-    void WriteBlockUnsafe(const Kernel::Process& process, VAddr dest_addr, const void* src_buffer,
+    void WriteBlockUnsafe(const Kernel::KProcess& process, VAddr dest_addr, const void* src_buffer,
                           std::size_t size);
 
     /**
@@ -496,7 +477,7 @@ public:
      * @post The range [dest_addr, size) within the process' address space is
      *       filled with zeroes.
      */
-    void ZeroBlock(const Kernel::Process& process, VAddr dest_addr, std::size_t size);
+    void ZeroBlock(const Kernel::KProcess& process, VAddr dest_addr, std::size_t size);
 
     /**
      * Fills the specified address range within the current process' address space with zeroes.
@@ -521,7 +502,7 @@ public:
      * @post The range [dest_addr, size) within the process' address space contains the
      *       same data within the range [src_addr, size).
      */
-    void CopyBlock(const Kernel::Process& process, VAddr dest_addr, VAddr src_addr,
+    void CopyBlock(const Kernel::KProcess& process, VAddr dest_addr, VAddr src_addr,
                    std::size_t size);
 
     /**
@@ -548,6 +529,8 @@ public:
     void RasterizerMarkRegionCached(VAddr vaddr, u64 size, bool cached);
 
 private:
+    Core::System& system;
+
     struct Impl;
     std::unique_ptr<Impl> impl;
 };

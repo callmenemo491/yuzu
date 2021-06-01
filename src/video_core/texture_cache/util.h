@@ -20,6 +20,8 @@ namespace VideoCommon {
 
 using Tegra::Texture::TICEntry;
 
+using LevelArray = std::array<u32, MAX_MIP_LEVELS>;
+
 struct OverlapResult {
     GPUVAddr gpu_addr;
     VAddr cpu_addr;
@@ -36,8 +38,7 @@ struct OverlapResult {
 
 [[nodiscard]] u32 CalculateLayerSize(const ImageInfo& info) noexcept;
 
-[[nodiscard]] std::array<u32, MAX_MIP_LEVELS> CalculateMipLevelOffsets(
-    const ImageInfo& info) noexcept;
+[[nodiscard]] LevelArray CalculateMipLevelOffsets(const ImageInfo& info) noexcept;
 
 [[nodiscard]] std::vector<u32> CalculateSliceOffsets(const ImageInfo& info);
 
@@ -87,17 +88,20 @@ void SwizzleImage(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr, const Ima
 [[nodiscard]] std::optional<OverlapResult> ResolveOverlap(const ImageInfo& new_info,
                                                           GPUVAddr gpu_addr, VAddr cpu_addr,
                                                           const ImageBase& overlap,
-                                                          bool strict_size);
+                                                          bool strict_size, bool broken_views,
+                                                          bool native_bgr);
 
 [[nodiscard]] bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs);
 
 [[nodiscard]] std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate,
                                                              const ImageBase& image,
                                                              GPUVAddr candidate_addr,
-                                                             RelaxedOptions options);
+                                                             RelaxedOptions options,
+                                                             bool broken_views, bool native_bgr);
 
 [[nodiscard]] bool IsSubresource(const ImageInfo& candidate, const ImageBase& image,
-                                 GPUVAddr candidate_addr, RelaxedOptions options);
+                                 GPUVAddr candidate_addr, RelaxedOptions options, bool broken_views,
+                                 bool native_bgr);
 
 void DeduceBlitImages(ImageInfo& dst_info, ImageInfo& src_info, const ImageBase* dst,
                       const ImageBase* src);

@@ -14,16 +14,17 @@
 
 namespace Service::Nvidia::Devices {
 
-nvhost_gpu::nvhost_gpu(Core::System& system, std::shared_ptr<nvmap> nvmap_dev,
-                       SyncpointManager& syncpoint_manager)
-    : nvdevice(system), nvmap_dev(std::move(nvmap_dev)), syncpoint_manager{syncpoint_manager} {
-    channel_fence.id = syncpoint_manager.AllocateSyncpoint();
-    channel_fence.value = system.GPU().GetSyncpointValue(channel_fence.id);
+nvhost_gpu::nvhost_gpu(Core::System& system_, std::shared_ptr<nvmap> nvmap_dev_,
+                       SyncpointManager& syncpoint_manager_)
+    : nvdevice{system_}, nvmap_dev{std::move(nvmap_dev_)}, syncpoint_manager{syncpoint_manager_} {
+    channel_fence.id = syncpoint_manager_.AllocateSyncpoint();
+    channel_fence.value = system_.GPU().GetSyncpointValue(channel_fence.id);
 }
 
 nvhost_gpu::~nvhost_gpu() = default;
 
-NvResult nvhost_gpu::Ioctl1(Ioctl command, const std::vector<u8>& input, std::vector<u8>& output) {
+NvResult nvhost_gpu::Ioctl1(DeviceFD fd, Ioctl command, const std::vector<u8>& input,
+                            std::vector<u8>& output) {
     switch (command.group) {
     case 0x0:
         switch (command.cmd) {
@@ -74,7 +75,7 @@ NvResult nvhost_gpu::Ioctl1(Ioctl command, const std::vector<u8>& input, std::ve
     return NvResult::NotImplemented;
 };
 
-NvResult nvhost_gpu::Ioctl2(Ioctl command, const std::vector<u8>& input,
+NvResult nvhost_gpu::Ioctl2(DeviceFD fd, Ioctl command, const std::vector<u8>& input,
                             const std::vector<u8>& inline_input, std::vector<u8>& output) {
     switch (command.group) {
     case 'H':
@@ -88,11 +89,14 @@ NvResult nvhost_gpu::Ioctl2(Ioctl command, const std::vector<u8>& input,
     return NvResult::NotImplemented;
 }
 
-NvResult nvhost_gpu::Ioctl3(Ioctl command, const std::vector<u8>& input, std::vector<u8>& output,
-                            std::vector<u8>& inline_output) {
+NvResult nvhost_gpu::Ioctl3(DeviceFD fd, Ioctl command, const std::vector<u8>& input,
+                            std::vector<u8>& output, std::vector<u8>& inline_output) {
     UNIMPLEMENTED_MSG("Unimplemented ioctl={:08X}", command.raw);
     return NvResult::NotImplemented;
 }
+
+void nvhost_gpu::OnOpen(DeviceFD fd) {}
+void nvhost_gpu::OnClose(DeviceFD fd) {}
 
 NvResult nvhost_gpu::SetNVMAPfd(const std::vector<u8>& input, std::vector<u8>& output) {
     IoctlSetNvmapFD params{};

@@ -26,9 +26,10 @@ using CPUInterrupts = std::array<CPUInterruptHandler, Core::Hardware::NUM_CPU_CO
 /// Generic ARMv8 CPU interface
 class ARM_Interface : NonCopyable {
 public:
-    explicit ARM_Interface(System& system_, CPUInterrupts& interrupt_handlers, bool uses_wall_clock)
-        : system{system_}, interrupt_handlers{interrupt_handlers}, uses_wall_clock{
-                                                                       uses_wall_clock} {}
+    explicit ARM_Interface(System& system_, CPUInterrupts& interrupt_handlers_,
+                           bool uses_wall_clock_)
+        : system{system_}, interrupt_handlers{interrupt_handlers_}, uses_wall_clock{
+                                                                        uses_wall_clock_} {}
     virtual ~ARM_Interface() = default;
 
     struct ThreadContext32 {
@@ -63,9 +64,6 @@ public:
 
     /// Step CPU by one instruction
     virtual void Step() = 0;
-
-    /// Exits execution from a callback, the callback must rewind the stack
-    virtual void ExceptionalExit() = 0;
 
     /// Clear all instruction cache
     virtual void ClearInstructionCache() = 0;
@@ -157,8 +155,6 @@ public:
      * @param value The new value to place in the register.
      */
     virtual void SetTPIDR_EL0(u64 value) = 0;
-
-    virtual void ChangeProcessorID(std::size_t new_core_id) = 0;
 
     virtual void SaveContext(ThreadContext32& ctx) = 0;
     virtual void SaveContext(ThreadContext64& ctx) = 0;

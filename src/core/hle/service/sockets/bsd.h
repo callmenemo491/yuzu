@@ -125,6 +125,7 @@ private:
     void Connect(Kernel::HLERequestContext& ctx);
     void GetPeerName(Kernel::HLERequestContext& ctx);
     void GetSockName(Kernel::HLERequestContext& ctx);
+    void GetSockOpt(Kernel::HLERequestContext& ctx);
     void Listen(Kernel::HLERequestContext& ctx);
     void Fcntl(Kernel::HLERequestContext& ctx);
     void SetSockOpt(Kernel::HLERequestContext& ctx);
@@ -135,6 +136,7 @@ private:
     void SendTo(Kernel::HLERequestContext& ctx);
     void Write(Kernel::HLERequestContext& ctx);
     void Close(Kernel::HLERequestContext& ctx);
+    void EventFd(Kernel::HLERequestContext& ctx);
 
     template <typename Work>
     void ExecuteWork(Kernel::HLERequestContext& ctx, Work work);

@@ -9,9 +9,9 @@
 #include "common/logging/log.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
-#include "video_core/renderer_vulkan/vk_device.h"
-#include "video_core/renderer_vulkan/wrapper.h"
 #include "video_core/surface.h"
+#include "video_core/vulkan_common/vulkan_device.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan::MaxwellToVK {
 
@@ -47,7 +47,7 @@ VkSamplerMipmapMode MipmapMode(Tegra::Texture::TextureMipmapFilter mipmap_filter
     return {};
 }
 
-VkSamplerAddressMode WrapMode(const VKDevice& device, Tegra::Texture::WrapMode wrap_mode,
+VkSamplerAddressMode WrapMode(const Device& device, Tegra::Texture::WrapMode wrap_mode,
                               Tegra::Texture::TextureFilter filter) {
     switch (wrap_mode) {
     case Tegra::Texture::WrapMode::Wrap:
@@ -110,8 +110,8 @@ VkCompareOp DepthCompareFunction(Tegra::Texture::DepthCompareFunc depth_compare_
 } // namespace Sampler
 
 namespace {
-
-enum : u32 { Attachable = 1, Storage = 2 };
+constexpr u32 Attachable = 1 << 0;
+constexpr u32 Storage = 1 << 1;
 
 struct FormatTuple {
     VkFormat format; ///< Vulkan format
@@ -166,7 +166,7 @@ struct FormatTuple {
     {VK_FORMAT_R16G16_SINT, Attachable | Storage},             // R16G16_SINT
     {VK_FORMAT_R16G16_SNORM, Attachable | Storage},            // R16G16_SNORM
     {VK_FORMAT_UNDEFINED},                                     // R32G32B32_FLOAT
-    {VK_FORMAT_R8G8B8A8_SRGB, Attachable},                     // A8B8G8R8_SRGB
+    {VK_FORMAT_A8B8G8R8_SRGB_PACK32, Attachable},              // A8B8G8R8_SRGB
     {VK_FORMAT_R8G8_UNORM, Attachable | Storage},              // R8G8_UNORM
     {VK_FORMAT_R8G8_SNORM, Attachable | Storage},              // R8G8_SNORM
     {VK_FORMAT_R8G8_SINT, Attachable | Storage},               // R8G8_SINT
@@ -222,22 +222,27 @@ constexpr bool IsZetaFormat(PixelFormat pixel_format) {
 
 } // Anonymous namespace
 
-FormatInfo SurfaceFormat(const VKDevice& device, FormatType format_type, PixelFormat pixel_format) {
-    ASSERT(static_cast<std::size_t>(pixel_format) < std::size(tex_format_tuples));
-
-    auto tuple = tex_format_tuples[static_cast<std::size_t>(pixel_format)];
+FormatInfo SurfaceFormat(const Device& device, FormatType format_type, bool with_srgb,
+                         PixelFormat pixel_format) {
+    ASSERT(static_cast<size_t>(pixel_format) < std::size(tex_format_tuples));
+    FormatTuple tuple = tex_format_tuples[static_cast<size_t>(pixel_format)];
     if (tuple.format == VK_FORMAT_UNDEFINED) {
         UNIMPLEMENTED_MSG("Unimplemented texture format with pixel format={}", pixel_format);
-        return {VK_FORMAT_A8B8G8R8_UNORM_PACK32, true, true};
+        return FormatInfo{VK_FORMAT_A8B8G8R8_UNORM_PACK32, true, true};
     }
 
     // Use A8B8G8R8_UNORM on hardware that doesn't support ASTC natively
     if (!device.IsOptimalAstcSupported() && VideoCore::Surface::IsPixelFormatASTC(pixel_format)) {
-        const bool is_srgb = VideoCore::Surface::IsPixelFormatSRGB(pixel_format);
-        tuple.format = is_srgb ? VK_FORMAT_A8B8G8R8_SRGB_PACK32 : VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+        const bool is_srgb = with_srgb && VideoCore::Surface::IsPixelFormatSRGB(pixel_format);
+        if (is_srgb) {
+            tuple.format = VK_FORMAT_A8B8G8R8_SRGB_PACK32;
+        } else {
+            tuple.format = VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+            tuple.usage |= Storage;
+        }
     }
-    const bool attachable = tuple.usage & Attachable;
-    const bool storage = tuple.usage & Storage;
+    const bool attachable = (tuple.usage & Attachable) != 0;
+    const bool storage = (tuple.usage & Storage) != 0;
 
     VkFormatFeatureFlags usage{};
     switch (format_type) {
@@ -280,7 +285,7 @@ VkShaderStageFlagBits ShaderStage(Tegra::Engines::ShaderType stage) {
     return {};
 }
 
-VkPrimitiveTopology PrimitiveTopology([[maybe_unused]] const VKDevice& device,
+VkPrimitiveTopology PrimitiveTopology([[maybe_unused]] const Device& device,
                                       Maxwell::PrimitiveTopology topology) {
     switch (topology) {
     case Maxwell::PrimitiveTopology::Points:
@@ -526,13 +531,9 @@ VkCompareOp ComparisonOp(Maxwell::ComparisonOp comparison) {
     return {};
 }
 
-VkIndexType IndexFormat(const VKDevice& device, Maxwell::IndexFormat index_format) {
+VkIndexType IndexFormat(Maxwell::IndexFormat index_format) {
     switch (index_format) {
     case Maxwell::IndexFormat::UnsignedByte:
-        if (!device.IsExtIndexTypeUint8Supported()) {
-            UNIMPLEMENTED_MSG("Native uint8 indices are not supported on this device");
-            return VK_INDEX_TYPE_UINT16;
-        }
         return VK_INDEX_TYPE_UINT8_EXT;
     case Maxwell::IndexFormat::UnsignedShort:
         return VK_INDEX_TYPE_UINT16;
@@ -671,7 +672,7 @@ VkFrontFace FrontFace(Maxwell::FrontFace front_face) {
     return {};
 }
 
-VkCullModeFlags CullFace(Maxwell::CullFace cull_face) {
+VkCullModeFlagBits CullFace(Maxwell::CullFace cull_face) {
     switch (cull_face) {
     case Maxwell::CullFace::Front:
         return VK_CULL_MODE_FRONT_BIT;

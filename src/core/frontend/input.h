@@ -11,6 +11,7 @@
 #include <utility>
 #include "common/logging/log.h"
 #include "common/param_package.h"
+#include "common/quaternion.h"
 #include "common/vector_math.h"
 
 namespace Input {
@@ -21,6 +22,11 @@ enum class AnalogDirection : u8 {
     UP,
     DOWN,
 };
+struct AnalogProperties {
+    float deadzone;
+    float range;
+    float threshold;
+};
 
 /// An abstract class template for an input device (a button, an analog input, etc.).
 template <typename StatusType>
@@ -28,6 +34,12 @@ class InputDevice {
 public:
     virtual ~InputDevice() = default;
     virtual StatusType GetStatus() const {
+        return {};
+    }
+    virtual StatusType GetRawStatus() const {
+        return GetStatus();
+    }
+    virtual AnalogProperties GetAnalogProperties() const {
         return {};
     }
     virtual bool GetAnalogDirectionStatus([[maybe_unused]] AnalogDirection direction) const {
@@ -132,9 +144,10 @@ using VibrationDevice = InputDevice<u8>;
 
 /**
  * A motion status is an object that returns a tuple of accelerometer state vector,
- * gyroscope state vector, rotation state vector and orientation state matrix.
+ * gyroscope state vector, rotation state vector, orientation state matrix and quaterion state
+ * vector.
  *
- * For both vectors:
+ * For both 3D vectors:
  *   x+ is the same direction as RIGHT on D-pad.
  *   y+ is normal to the touch screen, pointing outward.
  *   z+ is the same direction as UP on D-pad.
@@ -153,9 +166,13 @@ using VibrationDevice = InputDevice<u8>;
  *   x vector
  *   y vector
  *   z vector
+ *
+ * For quaternion state vector
+ *   xyz vector
+ *   w float
  */
 using MotionStatus = std::tuple<Common::Vec3<float>, Common::Vec3<float>, Common::Vec3<float>,
-                                std::array<Common::Vec3f, 3>>;
+                                std::array<Common::Vec3f, 3>, Common::Quaternion<f32>>;
 
 /**
  * A motion device is an input device that returns a motion status object
@@ -163,10 +180,11 @@ using MotionStatus = std::tuple<Common::Vec3<float>, Common::Vec3<float>, Common
 using MotionDevice = InputDevice<MotionStatus>;
 
 /**
- * A touch status is an object that returns a tuple of two floats and a bool. The floats are
- * x and y coordinates in the range 0.0 - 1.0, and the bool indicates whether it is pressed.
+ * A touch status is an object that returns an array of 16 tuple elements of two floats and a bool.
+ * The floats are x and y coordinates in the range 0.0 - 1.0, and the bool indicates whether it is
+ * pressed.
  */
-using TouchStatus = std::tuple<float, float, bool>;
+using TouchStatus = std::array<std::tuple<float, float, bool>, 16>;
 
 /**
  * A touch device is an input device that returns a touch status object

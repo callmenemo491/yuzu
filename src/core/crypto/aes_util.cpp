@@ -105,8 +105,6 @@ void AESCipher<Key, KeySize>::Transcode(const u8* src, std::size_t size, u8* des
             }
         }
     }
-
-    mbedtls_cipher_finish(context, nullptr, nullptr);
 }
 
 template <typename Key, std::size_t KeySize>
@@ -121,9 +119,9 @@ void AESCipher<Key, KeySize>::XTSTranscode(const u8* src, std::size_t size, u8* 
 }
 
 template <typename Key, std::size_t KeySize>
-void AESCipher<Key, KeySize>::SetIVImpl(const u8* data, std::size_t size) {
-    ASSERT_MSG((mbedtls_cipher_set_iv(&ctx->encryption_context, data, size) ||
-                mbedtls_cipher_set_iv(&ctx->decryption_context, data, size)) == 0,
+void AESCipher<Key, KeySize>::SetIV(std::span<const u8> data) {
+    ASSERT_MSG((mbedtls_cipher_set_iv(&ctx->encryption_context, data.data(), data.size()) ||
+                mbedtls_cipher_set_iv(&ctx->decryption_context, data.data(), data.size())) == 0,
                "Failed to set IV on mbedtls ciphers.");
 }
 

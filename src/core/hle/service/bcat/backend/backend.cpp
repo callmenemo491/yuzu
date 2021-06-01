@@ -5,19 +5,22 @@
 #include "common/hex_util.h"
 #include "common/logging/log.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/lock.h"
 #include "core/hle/service/bcat/backend/backend.h"
 
 namespace Service::BCAT {
 
 ProgressServiceBackend::ProgressServiceBackend(Kernel::KernelCore& kernel,
-                                               std::string_view event_name) {
-    event = Kernel::WritableEvent::CreateEventPair(
-        kernel, std::string("ProgressServiceBackend:UpdateEvent:").append(event_name));
+                                               std::string_view event_name)
+    : update_event{kernel} {
+    Kernel::KAutoObject::Create(std::addressof(update_event));
+    update_event.Initialize("ProgressServiceBackend:UpdateEvent:" + std::string(event_name));
 }
 
-std::shared_ptr<Kernel::ReadableEvent> ProgressServiceBackend::GetEvent() const {
-    return event.readable;
+Kernel::KReadableEvent& ProgressServiceBackend::GetEvent() {
+    return update_event.GetReadableEvent();
 }
 
 DeliveryCacheProgressImpl& ProgressServiceBackend::GetImpl() {
@@ -82,12 +85,12 @@ void ProgressServiceBackend::FinishDownload(ResultCode result) {
     SignalUpdate();
 }
 
-void ProgressServiceBackend::SignalUpdate() const {
+void ProgressServiceBackend::SignalUpdate() {
     if (need_hle_lock) {
         std::lock_guard lock(HLE::g_hle_lock);
-        event.writable->Signal();
+        update_event.GetWritableEvent().Signal();
     } else {
-        event.writable->Signal();
+        update_event.GetWritableEvent().Signal();
     }
 }
 

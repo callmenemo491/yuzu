@@ -4,9 +4,9 @@
 
 #include <algorithm>
 #include <array>
-#include "common/common_paths.h"
 #include "common/common_types.h"
-#include "common/file_util.h"
+#include "common/fs/file.h"
+#include "common/fs/path_util.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
 #include "common/swap.h"
@@ -16,8 +16,8 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/process.h"
 #include "core/hle/service/acc/acc.h"
 #include "core/hle/service/acc/acc_aa.h"
 #include "core/hle/service/acc/acc_su.h"
@@ -32,12 +32,18 @@
 
 namespace Service::Account {
 
-constexpr ResultCode ERR_INVALID_BUFFER_SIZE{ErrorModule::Account, 30};
+constexpr ResultCode ERR_INVALID_USER_ID{ErrorModule::Account, 20};
+constexpr ResultCode ERR_INVALID_APPLICATION_ID{ErrorModule::Account, 22};
+constexpr ResultCode ERR_INVALID_BUFFER{ErrorModule::Account, 30};
+constexpr ResultCode ERR_INVALID_BUFFER_SIZE{ErrorModule::Account, 31};
 constexpr ResultCode ERR_FAILED_SAVE_DATA{ErrorModule::Account, 100};
 
-static std::string GetImagePath(Common::UUID uuid) {
-    return Common::FS::GetUserPath(Common::FS::UserPath::NANDDir) +
-           "/system/save/8000000000000010/su/avators/" + uuid.FormatSwitch() + ".jpg";
+// Thumbnails are hard coded to be at least this size
+constexpr std::size_t THUMBNAIL_SIZE = 0x24000;
+
+static std::filesystem::path GetImagePath(Common::UUID uuid) {
+    return Common::FS::GetYuzuPath(Common::FS::YuzuPath::NANDDir) /
+           fmt::format("system/save/8000000000000010/su/avators/{}.jpg", uuid.FormatSwitch());
 }
 
 static constexpr u32 SanitizeJPEGSize(std::size_t size) {
@@ -322,7 +328,8 @@ protected:
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
 
-        const Common::FS::IOFile image(GetImagePath(user_id), "rb");
+        const Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Read,
+                                       Common::FS::FileType::BinaryFile);
         if (!image.IsOpen()) {
             LOG_WARNING(Service_ACC,
                         "Failed to load user provided image! Falling back to built-in backup...");
@@ -333,7 +340,10 @@ protected:
 
         const u32 size = SanitizeJPEGSize(image.GetSize());
         std::vector<u8> buffer(size);
-        image.ReadBytes(buffer.data(), buffer.size());
+
+        if (image.Read(buffer) != buffer.size()) {
+            LOG_ERROR(Service_ACC, "Failed to read all the bytes in the user provided image.");
+        }
 
         ctx.WriteBuffer(buffer);
         rb.Push<u32>(size);
@@ -344,7 +354,8 @@ protected:
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
 
-        const Common::FS::IOFile image(GetImagePath(user_id), "rb");
+        const Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Read,
+                                       Common::FS::FileType::BinaryFile);
 
         if (!image.IsOpen()) {
             LOG_WARNING(Service_ACC,
@@ -369,7 +380,7 @@ protected:
         if (user_data.size() < sizeof(ProfileData)) {
             LOG_ERROR(Service_ACC, "ProfileData buffer too small!");
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ERR_INVALID_BUFFER_SIZE);
+            rb.Push(ERR_INVALID_BUFFER);
             return;
         }
 
@@ -402,17 +413,18 @@ protected:
         if (user_data.size() < sizeof(ProfileData)) {
             LOG_ERROR(Service_ACC, "ProfileData buffer too small!");
             IPC::ResponseBuilder rb{ctx, 2};
-            rb.Push(ERR_INVALID_BUFFER_SIZE);
+            rb.Push(ERR_INVALID_BUFFER);
             return;
         }
 
         ProfileData data;
         std::memcpy(&data, user_data.data(), sizeof(ProfileData));
 
-        Common::FS::IOFile image(GetImagePath(user_id), "wb");
+        Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Write,
+                                 Common::FS::FileType::BinaryFile);
 
-        if (!image.IsOpen() || !image.Resize(image_data.size()) ||
-            image.WriteBytes(image_data.data(), image_data.size()) != image_data.size() ||
+        if (!image.IsOpen() || !image.SetSize(image_data.size()) ||
+            image.Write(image_data) != image_data.size() ||
             !profile_manager.SetProfileBaseAndData(user_id, base, data)) {
             LOG_ERROR(Service_ACC, "Failed to update profile data, base, and image!");
             IPC::ResponseBuilder rb{ctx, 2};
@@ -502,7 +514,7 @@ public:
             {1, &IManagerForApplication::GetAccountId, "GetAccountId"},
             {2, nullptr, "EnsureIdTokenCacheAsync"},
             {3, nullptr, "LoadIdTokenCache"},
-            {130, nullptr, "GetNintendoAccountUserResourceCacheForApplication"},
+            {130, &IManagerForApplication::GetNintendoAccountUserResourceCacheForApplication, "GetNintendoAccountUserResourceCacheForApplication"},
             {150, nullptr, "CreateAuthorizationRequest"},
             {160, &IManagerForApplication::StoreOpenContext, "StoreOpenContext"},
             {170, nullptr, "LoadNetworkServiceLicenseKindAsync"},
@@ -528,13 +540,29 @@ private:
         rb.PushRaw<u64>(user_id.GetNintendoID());
     }
 
+    void GetNintendoAccountUserResourceCacheForApplication(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_ACC, "(STUBBED) called");
+
+        std::vector<u8> nas_user_base_for_application(0x68);
+        ctx.WriteBuffer(nas_user_base_for_application, 0);
+
+        if (ctx.CanWriteBuffer(1)) {
+            std::vector<u8> unknown_out_buffer(ctx.GetWriteBufferSize(1));
+            ctx.WriteBuffer(unknown_out_buffer, 1);
+        }
+
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(RESULT_SUCCESS);
+        rb.PushRaw<u64>(user_id.GetNintendoID());
+    }
+
     void StoreOpenContext(Kernel::HLERequestContext& ctx) {
         LOG_WARNING(Service_ACC, "(STUBBED) called");
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
 
-    Common::UUID user_id;
+    Common::UUID user_id{Common::INVALID_UUID};
 };
 
 // 6.0.0+
@@ -588,12 +616,17 @@ public:
     explicit DAUTH_O(Core::System& system_, Common::UUID) : ServiceFramework{system_, "dauth:o"} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "EnsureAuthenticationTokenCacheAsync"}, // [5.0.0-5.1.0] GeneratePostData
-            {1, nullptr, "LoadAuthenticationTokenCache"}, // 6.0.0+
-            {2, nullptr, "InvalidateAuthenticationTokenCache"}, // 6.0.0+
-            {10, nullptr, "EnsureEdgeTokenCacheAsync"}, // 6.0.0+
-            {11, nullptr, "LoadEdgeTokenCache"}, // 6.0.0+
-            {12, nullptr, "InvalidateEdgeTokenCache"}, // 6.0.0+
+            {0, nullptr, "EnsureAuthenticationTokenCacheAsync"},
+            {1, nullptr, "LoadAuthenticationTokenCache"},
+            {2, nullptr, "InvalidateAuthenticationTokenCache"},
+            {10, nullptr, "EnsureEdgeTokenCacheAsync"},
+            {11, nullptr, "LoadEdgeTokenCache"},
+            {12, nullptr, "InvalidateEdgeTokenCache"},
+            {20, nullptr, "EnsureApplicationAuthenticationCacheAsync"},
+            {21, nullptr, "LoadApplicationAuthenticationTokenCache"},
+            {22, nullptr, "LoadApplicationNetworkServiceClientConfigCache"},
+            {23, nullptr, "IsApplicationAuthenticationCacheAvailable"},
+            {24, nullptr, "InvalidateApplicationAuthenticationCache"},
         };
         // clang-format on
 
@@ -675,16 +708,12 @@ void Module::Interface::IsUserRegistrationRequestPermitted(Kernel::HLERequestCon
 }
 
 void Module::Interface::InitializeApplicationInfo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx};
-
     LOG_DEBUG(Service_ACC, "called");
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(InitializeApplicationInfoBase());
 }
 
 void Module::Interface::InitializeApplicationInfoRestricted(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx};
-
     LOG_WARNING(Service_ACC, "(Partial implementation) called");
 
     // TODO(ogniK): We require checking if the user actually owns the title and what not. As of
@@ -808,6 +837,55 @@ void Module::Interface::ListOpenContextStoredUsers(Kernel::HLERequestContext& ct
     // TODO(ogniK): Handle open contexts
     ctx.WriteBuffer(profile_manager->GetOpenUsers());
     IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(RESULT_SUCCESS);
+}
+
+void Module::Interface::StoreSaveDataThumbnailApplication(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto uuid = rp.PopRaw<Common::UUID>();
+
+    LOG_WARNING(Service_ACC, "(STUBBED) called, uuid={}", uuid.Format());
+
+    // TODO(ogniK): Check if application ID is zero on acc initialize. As we don't have a reliable
+    // way of confirming things like the TID, we're going to assume a non zero value for the time
+    // being.
+    constexpr u64 tid{1};
+    StoreSaveDataThumbnail(ctx, uuid, tid);
+}
+
+void Module::Interface::StoreSaveDataThumbnailSystem(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto uuid = rp.PopRaw<Common::UUID>();
+    const auto tid = rp.Pop<u64_le>();
+
+    LOG_WARNING(Service_ACC, "(STUBBED) called, uuid={}, tid={:016X}", uuid.Format(), tid);
+    StoreSaveDataThumbnail(ctx, uuid, tid);
+}
+
+void Module::Interface::StoreSaveDataThumbnail(Kernel::HLERequestContext& ctx,
+                                               const Common::UUID& uuid, const u64 tid) {
+    IPC::ResponseBuilder rb{ctx, 2};
+
+    if (tid == 0) {
+        LOG_ERROR(Service_ACC, "TitleID is not valid!");
+        rb.Push(ERR_INVALID_APPLICATION_ID);
+        return;
+    }
+
+    if (!uuid) {
+        LOG_ERROR(Service_ACC, "User ID is not valid!");
+        rb.Push(ERR_INVALID_USER_ID);
+        return;
+    }
+    const auto thumbnail_size = ctx.GetReadBufferSize();
+    if (thumbnail_size != THUMBNAIL_SIZE) {
+        LOG_ERROR(Service_ACC, "Buffer size is empty! size={:X} expecting {:X}", thumbnail_size,
+                  THUMBNAIL_SIZE);
+        rb.Push(ERR_INVALID_BUFFER_SIZE);
+        return;
+    }
+
+    // TODO(ogniK): Construct save data thumbnail
     rb.Push(RESULT_SUCCESS);
 }
 

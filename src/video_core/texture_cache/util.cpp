@@ -47,7 +47,6 @@
 #include "video_core/texture_cache/formatter.h"
 #include "video_core/texture_cache/samples_helper.h"
 #include "video_core/texture_cache/util.h"
-#include "video_core/textures/astc.h"
 #include "video_core/textures/decoders.h"
 
 namespace VideoCommon {
@@ -169,40 +168,6 @@ template <u32 GOB_EXTENT>
     return Common::DivCeil(AdjustMipSize(size, level), block_size);
 }
 
-[[nodiscard]] constexpr u32 LayerSize(const TICEntry& config, PixelFormat format) {
-    return config.Width() * config.Height() * BytesPerBlock(format);
-}
-
-[[nodiscard]] constexpr bool HasTwoDimsPerLayer(TextureType type) {
-    switch (type) {
-    case TextureType::Texture2D:
-    case TextureType::Texture2DArray:
-    case TextureType::Texture2DNoMipmap:
-    case TextureType::Texture3D:
-    case TextureType::TextureCubeArray:
-    case TextureType::TextureCubemap:
-        return true;
-    case TextureType::Texture1D:
-    case TextureType::Texture1DArray:
-    case TextureType::Texture1DBuffer:
-        return false;
-    }
-    return false;
-}
-
-[[nodiscard]] constexpr bool HasTwoDimsPerLayer(ImageType type) {
-    switch (type) {
-    case ImageType::e2D:
-    case ImageType::e3D:
-    case ImageType::Linear:
-        return true;
-    case ImageType::e1D:
-    case ImageType::Buffer:
-        return false;
-    }
-    UNREACHABLE_MSG("Invalid image type={}", static_cast<int>(type));
-}
-
 [[nodiscard]] constexpr std::pair<int, int> Samples(int num_samples) {
     switch (num_samples) {
     case 1:
@@ -279,7 +244,7 @@ template <u32 GOB_EXTENT>
     const bool is_small = IsSmallerThanGobSize(blocks, gob, info.block.depth);
     const u32 alignment = is_small ? 0 : info.tile_width_spacing;
     return Extent2D{
-        .width = Common::AlignBits(gobs.width, alignment),
+        .width = Common::AlignUpLog2(gobs.width, alignment),
         .height = gobs.height,
     };
 }
@@ -303,14 +268,17 @@ template <u32 GOB_EXTENT>
     return num_tiles << shift;
 }
 
-[[nodiscard]] constexpr std::array<u32, MAX_MIP_LEVELS> CalculateLevelSizes(const LevelInfo& info,
-                                                                            u32 num_levels) {
+[[nodiscard]] constexpr LevelArray CalculateLevelSizes(const LevelInfo& info, u32 num_levels) {
     ASSERT(num_levels <= MAX_MIP_LEVELS);
-    std::array<u32, MAX_MIP_LEVELS> sizes{};
+    LevelArray sizes{};
     for (u32 level = 0; level < num_levels; ++level) {
         sizes[level] = CalculateLevelSize(info, level);
     }
     return sizes;
+}
+
+[[nodiscard]] u32 CalculateLevelBytes(const LevelArray& sizes, u32 num_levels) {
+    return std::reduce(sizes.begin(), sizes.begin() + num_levels, 0U);
 }
 
 [[nodiscard]] constexpr LevelInfo MakeLevelInfo(PixelFormat format, Extent3D size, Extent3D block,
@@ -352,7 +320,7 @@ template <u32 GOB_EXTENT>
     // https://github.com/Ryujinx/Ryujinx/blob/1c9aba6de1520aea5480c032e0ff5664ac1bb36f/Ryujinx.Graphics.Texture/SizeCalculator.cs#L134
     if (tile_width_spacing > 0) {
         const u32 alignment_log2 = GOB_SIZE_SHIFT + tile_width_spacing + block.height + block.depth;
-        return Common::AlignBits(size_bytes, alignment_log2);
+        return Common::AlignUpLog2(size_bytes, alignment_log2);
     }
     const u32 aligned_height = Common::AlignUp(size.height, tile_size_y);
     while (block.height != 0 && aligned_height <= (1U << (block.height - 1)) * GOB_SIZE_Y) {
@@ -528,9 +496,9 @@ template <u32 GOB_EXTENT>
     const u32 alignment = StrideAlignment(num_tiles, info.block, bpp_log2, info.tile_width_spacing);
     const Extent3D mip_block = AdjustMipBlockSize(num_tiles, info.block, 0);
     return Extent3D{
-        .width = Common::AlignBits(num_tiles.width, alignment),
-        .height = Common::AlignBits(num_tiles.height, GOB_SIZE_Y_SHIFT + mip_block.height),
-        .depth = Common::AlignBits(num_tiles.depth, GOB_SIZE_Z_SHIFT + mip_block.depth),
+        .width = Common::AlignUpLog2(num_tiles.width, alignment),
+        .height = Common::AlignUpLog2(num_tiles.height, GOB_SIZE_Y_SHIFT + mip_block.height),
+        .depth = Common::AlignUpLog2(num_tiles.depth, GOB_SIZE_Z_SHIFT + mip_block.depth),
     };
 }
 
@@ -601,10 +569,10 @@ void SwizzleBlockLinearImage(Tegra::MemoryManager& gpu_memory, GPUVAddr gpu_addr
 
     const u32 num_levels = info.resources.levels;
     const std::array sizes = CalculateLevelSizes(level_info, num_levels);
-    size_t guest_offset = std::reduce(sizes.begin(), sizes.begin() + level, 0);
+    size_t guest_offset = CalculateLevelBytes(sizes, level);
     const size_t layer_stride =
-        AlignLayerSize(std::reduce(sizes.begin(), sizes.begin() + num_levels, 0), size,
-                       level_info.block, tile_size.height, info.tile_width_spacing);
+        AlignLayerSize(CalculateLevelBytes(sizes, num_levels), size, level_info.block,
+                       tile_size.height, info.tile_width_spacing);
     const size_t subresource_size = sizes[level];
 
     const auto dst_data = std::make_unique<u8[]>(subresource_size);
@@ -678,10 +646,10 @@ u32 CalculateLayerSize(const ImageInfo& info) noexcept {
                                 info.tile_width_spacing, info.resources.levels);
 }
 
-std::array<u32, MAX_MIP_LEVELS> CalculateMipLevelOffsets(const ImageInfo& info) noexcept {
-    ASSERT(info.resources.levels <= MAX_MIP_LEVELS);
+LevelArray CalculateMipLevelOffsets(const ImageInfo& info) noexcept {
+    ASSERT(info.resources.levels <= static_cast<s32>(MAX_MIP_LEVELS));
     const LevelInfo level_info = MakeLevelInfo(info);
-    std::array<u32, MAX_MIP_LEVELS> offsets{};
+    LevelArray offsets{};
     u32 offset = 0;
     for (s32 level = 0; level < info.resources.levels; ++level) {
         offsets[level] = offset;
@@ -847,7 +815,7 @@ std::vector<BufferImageCopy> UnswizzleImage(Tegra::MemoryManager& gpu_memory, GP
     const Extent2D tile_size = DefaultBlockSize(info.format);
     const std::array level_sizes = CalculateLevelSizes(level_info, num_levels);
     const Extent2D gob = GobSize(bpp_log2, info.block.height, info.tile_width_spacing);
-    const u32 layer_size = std::reduce(level_sizes.begin(), level_sizes.begin() + num_levels, 0);
+    const u32 layer_size = CalculateLevelBytes(level_sizes, num_levels);
     const u32 layer_stride = AlignLayerSize(layer_size, size, level_info.block, tile_size.height,
                                             info.tile_width_spacing);
     size_t guest_offset = 0;
@@ -913,17 +881,8 @@ void ConvertImage(std::span<const u8> input, const ImageInfo& info, std::span<u8
         ASSERT(copy.image_extent == mip_size);
         ASSERT(copy.buffer_row_length == Common::AlignUp(mip_size.width, tile_size.width));
         ASSERT(copy.buffer_image_height == Common::AlignUp(mip_size.height, tile_size.height));
-
-        if (IsPixelFormatASTC(info.format)) {
-            ASSERT(copy.image_extent.depth == 1);
-            Tegra::Texture::ASTC::Decompress(input.subspan(copy.buffer_offset),
-                                             copy.image_extent.width, copy.image_extent.height,
-                                             copy.image_subresource.num_layers, tile_size.width,
-                                             tile_size.height, output.subspan(output_offset));
-        } else {
-            DecompressBC4(input.subspan(copy.buffer_offset), copy.image_extent,
-                          output.subspan(output_offset));
-        }
+        DecompressBC4(input.subspan(copy.buffer_offset), copy.image_extent,
+                      output.subspan(output_offset));
         copy.buffer_offset = output_offset;
         copy.buffer_row_length = mip_size.width;
         copy.buffer_image_height = mip_size.height;
@@ -1069,13 +1028,13 @@ bool IsPitchLinearSameSize(const ImageInfo& lhs, const ImageInfo& rhs, bool stri
 
 std::optional<OverlapResult> ResolveOverlap(const ImageInfo& new_info, GPUVAddr gpu_addr,
                                             VAddr cpu_addr, const ImageBase& overlap,
-                                            bool strict_size) {
+                                            bool strict_size, bool broken_views, bool native_bgr) {
     ASSERT(new_info.type != ImageType::Linear);
     ASSERT(overlap.info.type != ImageType::Linear);
     if (!IsLayerStrideCompatible(new_info, overlap.info)) {
         return std::nullopt;
     }
-    if (!IsViewCompatible(overlap.info.format, new_info.format)) {
+    if (!IsViewCompatible(overlap.info.format, new_info.format, broken_views, native_bgr)) {
         return std::nullopt;
     }
     if (gpu_addr == overlap.gpu_addr) {
@@ -1118,14 +1077,15 @@ bool IsLayerStrideCompatible(const ImageInfo& lhs, const ImageInfo& rhs) {
 }
 
 std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate, const ImageBase& image,
-                                               GPUVAddr candidate_addr, RelaxedOptions options) {
+                                               GPUVAddr candidate_addr, RelaxedOptions options,
+                                               bool broken_views, bool native_bgr) {
     const std::optional<SubresourceBase> base = image.TryFindBase(candidate_addr);
     if (!base) {
         return std::nullopt;
     }
     const ImageInfo& existing = image.info;
     if (False(options & RelaxedOptions::Format)) {
-        if (!IsViewCompatible(existing.format, candidate.format)) {
+        if (!IsViewCompatible(existing.format, candidate.format, broken_views, native_bgr)) {
             return std::nullopt;
         }
     }
@@ -1162,8 +1122,9 @@ std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate, const
 }
 
 bool IsSubresource(const ImageInfo& candidate, const ImageBase& image, GPUVAddr candidate_addr,
-                   RelaxedOptions options) {
-    return FindSubresource(candidate, image, candidate_addr, options).has_value();
+                   RelaxedOptions options, bool broken_views, bool native_bgr) {
+    return FindSubresource(candidate, image, candidate_addr, options, broken_views, native_bgr)
+        .has_value();
 }
 
 void DeduceBlitImages(ImageInfo& dst_info, ImageInfo& src_info, const ImageBase* dst,
@@ -1178,7 +1139,7 @@ void DeduceBlitImages(ImageInfo& dst_info, ImageInfo& src_info, const ImageBase*
         dst_info.format = src->info.format;
     }
     if (!src && dst && GetFormatType(dst->info.format) != SurfaceType::ColorTexture) {
-        src_info.format = src->info.format;
+        src_info.format = dst->info.format;
     }
 }
 
@@ -1192,25 +1153,35 @@ u32 MapSizeBytes(const ImageBase& image) {
     }
 }
 
-using P = PixelFormat;
+static_assert(CalculateLevelSize(LevelInfo{{1920, 1080, 1}, {0, 2, 0}, {1, 1}, 2, 0}, 0) ==
+              0x7f8000);
+static_assert(CalculateLevelSize(LevelInfo{{32, 32, 1}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);
 
-static_assert(CalculateLevelSize(LevelInfo{{1920, 1080}, {0, 2, 0}, {1, 1}, 2, 0}, 0) == 0x7f8000);
-static_assert(CalculateLevelSize(LevelInfo{{32, 32}, {0, 0, 4}, {1, 1}, 4, 0}, 0) == 0x4000);
+static_assert(CalculateLevelOffset(PixelFormat::R8_SINT, {1920, 1080, 1}, {0, 2, 0}, 1, 0, 7) ==
+              0x2afc00);
+static_assert(CalculateLevelOffset(PixelFormat::ASTC_2D_12X12_UNORM, {8192, 4096, 1}, {0, 2, 0}, 1,
+                                   0, 12) == 0x50d200);
 
-static_assert(CalculateLevelOffset(P::R8_SINT, {1920, 1080}, {0, 2}, 1, 0, 7) == 0x2afc00);
-static_assert(CalculateLevelOffset(P::ASTC_2D_12X12_UNORM, {8192, 4096}, {0, 2}, 1, 0, 12) ==
-              0x50d200);
-
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 0) == 0);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 1) == 0x400000);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 2) == 0x500000);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 3) == 0x540000);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 4) == 0x550000);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 5) == 0x554000);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 6) == 0x555000);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 7) == 0x555400);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 8) == 0x555600);
-static_assert(CalculateLevelOffset(P::A8B8G8R8_UNORM, {1024, 1024}, {0, 4}, 1, 0, 9) == 0x555800);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   0) == 0);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   1) == 0x400000);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   2) == 0x500000);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   3) == 0x540000);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   4) == 0x550000);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   5) == 0x554000);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   6) == 0x555000);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   7) == 0x555400);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   8) == 0x555600);
+static_assert(CalculateLevelOffset(PixelFormat::A8B8G8R8_UNORM, {1024, 1024, 1}, {0, 4, 0}, 1, 0,
+                                   9) == 0x555800);
 
 constexpr u32 ValidateLayerSize(PixelFormat format, u32 width, u32 height, u32 block_height,
                                 u32 tile_width_spacing, u32 level) {
@@ -1220,13 +1191,14 @@ constexpr u32 ValidateLayerSize(PixelFormat format, u32 width, u32 height, u32 b
     return AlignLayerSize(offset, size, block, DefaultBlockHeight(format), tile_width_spacing);
 }
 
-static_assert(ValidateLayerSize(P::ASTC_2D_12X12_UNORM, 8192, 4096, 2, 0, 12) == 0x50d800);
-static_assert(ValidateLayerSize(P::A8B8G8R8_UNORM, 1024, 1024, 2, 0, 10) == 0x556000);
-static_assert(ValidateLayerSize(P::BC3_UNORM, 128, 128, 2, 0, 8) == 0x6000);
+static_assert(ValidateLayerSize(PixelFormat::ASTC_2D_12X12_UNORM, 8192, 4096, 2, 0, 12) ==
+              0x50d800);
+static_assert(ValidateLayerSize(PixelFormat::A8B8G8R8_UNORM, 1024, 1024, 2, 0, 10) == 0x556000);
+static_assert(ValidateLayerSize(PixelFormat::BC3_UNORM, 128, 128, 2, 0, 8) == 0x6000);
 
-static_assert(ValidateLayerSize(P::A8B8G8R8_UNORM, 518, 572, 4, 3, 1) == 0x190000,
+static_assert(ValidateLayerSize(PixelFormat::A8B8G8R8_UNORM, 518, 572, 4, 3, 1) == 0x190000,
               "Tile width spacing is not working");
-static_assert(ValidateLayerSize(P::BC5_UNORM, 1024, 1024, 3, 4, 11) == 0x160000,
+static_assert(ValidateLayerSize(PixelFormat::BC5_UNORM, 1024, 1024, 3, 4, 11) == 0x160000,
               "Compressed tile width spacing is not working");
 
 } // namespace VideoCommon

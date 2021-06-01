@@ -22,11 +22,11 @@
 #include "video_core/engines/shader_bytecode.h"
 #include "video_core/engines/shader_header.h"
 #include "video_core/engines/shader_type.h"
-#include "video_core/renderer_vulkan/vk_device.h"
 #include "video_core/renderer_vulkan/vk_shader_decompiler.h"
 #include "video_core/shader/node.h"
 #include "video_core/shader/shader_ir.h"
 #include "video_core/shader/transform_feedback.h"
+#include "video_core/vulkan_common/vulkan_device.h"
 
 namespace Vulkan {
 
@@ -272,19 +272,12 @@ bool IsPrecise(Operation operand) {
     return false;
 }
 
-u32 ShaderVersion(const VKDevice& device) {
-    if (device.InstanceApiVersion() < VK_API_VERSION_1_1) {
-        return 0x00010000;
-    }
-    return 0x00010300;
-}
-
 class SPIRVDecompiler final : public Sirit::Module {
 public:
-    explicit SPIRVDecompiler(const VKDevice& device_, const ShaderIR& ir_, ShaderType stage_,
+    explicit SPIRVDecompiler(const Device& device_, const ShaderIR& ir_, ShaderType stage_,
                              const Registry& registry_, const Specialization& specialization_)
-        : Module(ShaderVersion(device_)), device{device_}, ir{ir_}, stage{stage_},
-          header{ir_.GetHeader()}, registry{registry_}, specialization{specialization_} {
+        : Module(0x00010300), device{device_}, ir{ir_}, stage{stage_}, header{ir_.GetHeader()},
+          registry{registry_}, specialization{specialization_} {
         if (stage_ != ShaderType::Compute) {
             transform_feedback = BuildTransformFeedback(registry_.GetGraphicsInfo());
         }
@@ -1341,7 +1334,10 @@ private:
         }
 
         if (const auto comment = std::get_if<CommentNode>(&*node)) {
-            Name(OpUndef(t_void), comment->GetText());
+            if (device.HasDebuggingToolAttached()) {
+                // We should insert comments with OpString instead of using named variables
+                Name(OpUndef(t_int), comment->GetText());
+            }
             return {};
         }
 
@@ -1849,13 +1845,21 @@ private:
 
     Expression TextureGather(Operation operation) {
         const auto& meta = std::get<MetaTexture>(operation.GetMeta());
-        UNIMPLEMENTED_IF(!meta.aoffi.empty());
 
         const Id coords = GetCoordinates(operation, Type::Float);
+
+        spv::ImageOperandsMask mask = spv::ImageOperandsMask::MaskNone;
+        std::vector<Id> operands;
         Id texture{};
+
+        if (!meta.aoffi.empty()) {
+            mask = mask | spv::ImageOperandsMask::Offset;
+            operands.push_back(GetOffsetCoordinates(operation));
+        }
+
         if (meta.sampler.is_shadow) {
             texture = OpImageDrefGather(t_float4, GetTextureSampler(operation), coords,
-                                        AsFloat(Visit(meta.depth_compare)));
+                                        AsFloat(Visit(meta.depth_compare)), mask, operands);
         } else {
             u32 component_value = 0;
             if (meta.component) {
@@ -1864,7 +1868,7 @@ private:
                 component_value = component->GetValue();
             }
             texture = OpImageGather(t_float4, GetTextureSampler(operation), coords,
-                                    Constant(t_uint, component_value));
+                                    Constant(t_uint, component_value), mask, operands);
         }
         return GetTextureElement(operation, texture, Type::Float);
     }
@@ -1932,13 +1936,22 @@ private:
 
         const Id image = GetTextureImage(operation);
         const Id coords = GetCoordinates(operation, Type::Int);
+
+        spv::ImageOperandsMask mask = spv::ImageOperandsMask::MaskNone;
+        std::vector<Id> operands;
         Id fetch;
+
         if (meta.lod && !meta.sampler.is_buffer) {
-            fetch = OpImageFetch(t_float4, image, coords, spv::ImageOperandsMask::Lod,
-                                 AsInt(Visit(meta.lod)));
-        } else {
-            fetch = OpImageFetch(t_float4, image, coords);
+            mask = mask | spv::ImageOperandsMask::Lod;
+            operands.push_back(AsInt(Visit(meta.lod)));
         }
+
+        if (!meta.aoffi.empty()) {
+            mask = mask | spv::ImageOperandsMask::Offset;
+            operands.push_back(GetOffsetCoordinates(operation));
+        }
+
+        fetch = OpImageFetch(t_float4, image, coords, mask, operands);
         return GetTextureElement(operation, fetch, Type::Float);
     }
 
@@ -2749,7 +2762,7 @@ private:
     };
     static_assert(operation_decompilers.size() == static_cast<std::size_t>(OperationCode::Amount));
 
-    const VKDevice& device;
+    const Device& device;
     const ShaderIR& ir;
     const ShaderType stage;
     const Tegra::Shader::Header header;
@@ -3110,7 +3123,11 @@ ShaderEntries GenerateShaderEntries(const VideoCommon::Shader::ShaderIR& ir) {
         entries.const_buffers.emplace_back(cbuf.second, cbuf.first);
     }
     for (const auto& [base, usage] : ir.GetGlobalMemory()) {
-        entries.global_buffers.emplace_back(base.cbuf_index, base.cbuf_offset, usage.is_written);
+        entries.global_buffers.emplace_back(GlobalBufferEntry{
+            .cbuf_index = base.cbuf_index,
+            .cbuf_offset = base.cbuf_offset,
+            .is_written = usage.is_written,
+        });
     }
     for (const auto& sampler : ir.GetSamplers()) {
         if (sampler.is_buffer) {
@@ -3131,13 +3148,16 @@ ShaderEntries GenerateShaderEntries(const VideoCommon::Shader::ShaderIR& ir) {
             entries.attributes.insert(GetGenericAttributeLocation(attribute));
         }
     }
+    for (const auto& buffer : entries.const_buffers) {
+        entries.enabled_uniform_buffers |= 1U << buffer.GetIndex();
+    }
     entries.clip_distances = ir.GetClipDistances();
     entries.shader_length = ir.GetLength();
     entries.uses_warps = ir.UsesWarps();
     return entries;
 }
 
-std::vector<u32> Decompile(const VKDevice& device, const VideoCommon::Shader::ShaderIR& ir,
+std::vector<u32> Decompile(const Device& device, const VideoCommon::Shader::ShaderIR& ir,
                            ShaderType stage, const VideoCommon::Shader::Registry& registry,
                            const Specialization& specialization) {
     return SPIRVDecompiler(device, ir, stage, registry, specialization).Assemble();

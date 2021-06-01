@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -14,7 +15,6 @@
 #include <vector>
 
 #include "common/common_types.h"
-#include "core/hle/kernel/object.h"
 
 namespace Common {
 class Event;
@@ -26,8 +26,8 @@ struct EventType;
 } // namespace Core::Timing
 
 namespace Kernel {
-class ReadableEvent;
-class WritableEvent;
+class KReadableEvent;
+class KWritableEvent;
 } // namespace Kernel
 
 namespace Service::Nvidia {
@@ -45,7 +45,7 @@ class BufferQueue;
 
 class NVFlinger final {
 public:
-    explicit NVFlinger(Core::System& system);
+    explicit NVFlinger(Core::System& system_);
     ~NVFlinger();
 
     /// Sets the NVDrv module instance to use to send buffers to the GPU.
@@ -67,12 +67,12 @@ public:
     /// Finds the buffer queue ID of the specified layer in the specified display.
     ///
     /// If an invalid display ID or layer ID is provided, then an empty optional is returned.
-    [[nodiscard]] std::optional<u32> FindBufferQueueId(u64 display_id, u64 layer_id) const;
+    [[nodiscard]] std::optional<u32> FindBufferQueueId(u64 display_id, u64 layer_id);
 
     /// Gets the vsync event for the specified display.
     ///
     /// If an invalid display ID is provided, then nullptr is returned.
-    [[nodiscard]] std::shared_ptr<Kernel::ReadableEvent> FindVsyncEvent(u64 display_id) const;
+    [[nodiscard]] Kernel::KReadableEvent* FindVsyncEvent(u64 display_id);
 
     /// Obtains a buffer queue identified by the ID.
     [[nodiscard]] BufferQueue* FindBufferQueue(u32 id);
@@ -100,13 +100,21 @@ private:
     /// Finds the layer identified by the specified ID in the desired display.
     [[nodiscard]] const VI::Layer* FindLayer(u64 display_id, u64 layer_id) const;
 
+    /// Finds the layer identified by the specified ID in the desired display,
+    /// or creates the layer if it is not found.
+    /// To be used when the system expects the specified ID to already exist.
+    [[nodiscard]] VI::Layer* FindOrCreateLayer(u64 display_id, u64 layer_id);
+
+    /// Creates a layer with the specified layer ID in the desired display.
+    void CreateLayerAtId(VI::Display& display, u64 layer_id);
+
     static void VSyncThread(NVFlinger& nv_flinger);
 
     void SplitVSync();
 
     std::shared_ptr<Nvidia::Module> nvdrv;
 
-    std::vector<VI::Display> displays;
+    std::list<VI::Display> displays;
     std::vector<std::unique_ptr<BufferQueue>> buffer_queues;
 
     /// Id to use for the next layer that is created, this counter is shared among all displays.

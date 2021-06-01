@@ -4,9 +4,10 @@
 
 #include "common/alignment.h"
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "core/core.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/memory.h"
 #include "video_core/gpu.h"
 #include "video_core/memory_manager.h"
@@ -20,8 +21,8 @@ MemoryManager::MemoryManager(Core::System& system_)
 
 MemoryManager::~MemoryManager() = default;
 
-void MemoryManager::BindRasterizer(VideoCore::RasterizerInterface& rasterizer_) {
-    rasterizer = &rasterizer_;
+void MemoryManager::BindRasterizer(VideoCore::RasterizerInterface* rasterizer_) {
+    rasterizer = rasterizer_;
 }
 
 GPUVAddr MemoryManager::UpdateRange(GPUVAddr gpu_addr, PageEntry page_entry, std::size_t size) {
@@ -38,6 +39,12 @@ GPUVAddr MemoryManager::UpdateRange(GPUVAddr gpu_addr, PageEntry page_entry, std
 }
 
 GPUVAddr MemoryManager::Map(VAddr cpu_addr, GPUVAddr gpu_addr, std::size_t size) {
+    const auto it = std::ranges::lower_bound(map_ranges, gpu_addr, {}, &MapRange::first);
+    if (it != map_ranges.end() && it->first == gpu_addr) {
+        it->second = size;
+    } else {
+        map_ranges.insert(it, MapRange{gpu_addr, size});
+    }
     return UpdateRange(gpu_addr, cpu_addr, size);
 }
 
@@ -52,10 +59,16 @@ GPUVAddr MemoryManager::MapAllocate32(VAddr cpu_addr, std::size_t size) {
 }
 
 void MemoryManager::Unmap(GPUVAddr gpu_addr, std::size_t size) {
-    if (!size) {
+    if (size == 0) {
         return;
     }
-
+    const auto it = std::ranges::lower_bound(map_ranges, gpu_addr, {}, &MapRange::first);
+    if (it != map_ranges.end()) {
+        ASSERT(it->first == gpu_addr);
+        map_ranges.erase(it);
+    } else {
+        UNREACHABLE_MSG("Unmapping non-existent GPU address=0x{:x}", gpu_addr);
+    }
     // Flush and invalidate through the GPU interface, to be asynchronous if possible.
     const std::optional<VAddr> cpu_addr = GpuToCpuAddress(gpu_addr);
     ASSERT(cpu_addr);
@@ -218,6 +231,12 @@ const u8* MemoryManager::GetPointer(GPUVAddr gpu_addr) const {
     return system.Memory().GetPointer(*address);
 }
 
+size_t MemoryManager::BytesToMapEnd(GPUVAddr gpu_addr) const noexcept {
+    auto it = std::ranges::upper_bound(map_ranges, gpu_addr, {}, &MapRange::first);
+    --it;
+    return it->second - (gpu_addr - it->first);
+}
+
 void MemoryManager::ReadBlock(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size) const {
     std::size_t remaining_size{size};
     std::size_t page_index{gpu_src_addr >> page_bits};
@@ -314,17 +333,29 @@ void MemoryManager::WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buf
     }
 }
 
+void MemoryManager::FlushRegion(GPUVAddr gpu_addr, size_t size) const {
+    size_t remaining_size{size};
+    size_t page_index{gpu_addr >> page_bits};
+    size_t page_offset{gpu_addr & page_mask};
+    while (remaining_size > 0) {
+        const size_t num_bytes{std::min(page_size - page_offset, remaining_size)};
+        if (const auto page_addr{GpuToCpuAddress(page_index << page_bits)}; page_addr) {
+            rasterizer->FlushRegion(*page_addr + page_offset, num_bytes);
+        }
+        ++page_index;
+        page_offset = 0;
+        remaining_size -= num_bytes;
+    }
+}
+
 void MemoryManager::CopyBlock(GPUVAddr gpu_dest_addr, GPUVAddr gpu_src_addr, std::size_t size) {
     std::vector<u8> tmp_buffer(size);
     ReadBlock(gpu_src_addr, tmp_buffer.data(), size);
-    WriteBlock(gpu_dest_addr, tmp_buffer.data(), size);
-}
 
-void MemoryManager::CopyBlockUnsafe(GPUVAddr gpu_dest_addr, GPUVAddr gpu_src_addr,
-                                    std::size_t size) {
-    std::vector<u8> tmp_buffer(size);
-    ReadBlockUnsafe(gpu_src_addr, tmp_buffer.data(), size);
-    WriteBlockUnsafe(gpu_dest_addr, tmp_buffer.data(), size);
+    // The output block must be flushed in case it has data modified from the GPU.
+    // Fixes NPC geometry in Zombie Panic in Wonderland DX
+    FlushRegion(gpu_dest_addr, size);
+    WriteBlock(gpu_dest_addr, tmp_buffer.data(), size);
 }
 
 bool MemoryManager::IsGranularRange(GPUVAddr gpu_addr, std::size_t size) const {

@@ -16,14 +16,12 @@
 
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
-#include "core/settings.h"
+#include "common/settings.h"
 #include "video_core/renderer_opengl/gl_device.h"
 #include "video_core/renderer_opengl/gl_resource_manager.h"
 
 namespace OpenGL {
-
 namespace {
-
 // One uniform block is reserved for emulation purposes
 constexpr u32 ReservedUniformBlocks = 1;
 
@@ -197,17 +195,26 @@ bool IsASTCSupported() {
     const bool nsight = std::getenv("NVTX_INJECTION64_PATH") || std::getenv("NSIGHT_LAUNCHED");
     return nsight || HasExtension(extensions, "GL_EXT_debug_tool");
 }
-
 } // Anonymous namespace
 
-Device::Device()
-    : max_uniform_buffers{BuildMaxUniformBuffers()}, base_bindings{BuildBaseBindings()} {
+Device::Device() {
+    if (!GLAD_GL_VERSION_4_6) {
+        LOG_ERROR(Render_OpenGL, "OpenGL 4.6 is not available");
+        throw std::runtime_error{"Insufficient version"};
+    }
     const std::string_view vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
     const std::string_view version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
     const std::vector extensions = GetExtensions();
 
     const bool is_nvidia = vendor == "NVIDIA Corporation";
     const bool is_amd = vendor == "ATI Technologies Inc.";
+    const bool is_intel = vendor == "Intel";
+
+#ifdef __unix__
+    const bool is_linux = true;
+#else
+    const bool is_linux = false;
+#endif
 
     bool disable_fast_buffer_sub_data = false;
     if (is_nvidia && version == "4.6.0 NVIDIA 443.24") {
@@ -216,6 +223,9 @@ Device::Device()
             "Beta driver 443.24 is known to have issues. There might be performance issues.");
         disable_fast_buffer_sub_data = true;
     }
+
+    max_uniform_buffers = BuildMaxUniformBuffers();
+    base_bindings = BuildBaseBindings();
     uniform_buffer_alignment = GetInteger<size_t>(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT);
     shader_storage_alignment = GetInteger<size_t>(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
     max_vertex_attributes = GetInteger<u32>(GL_MAX_VERTEX_ATTRIBS);
@@ -231,9 +241,11 @@ Device::Device()
     has_variable_aoffi = TestVariableAoffi();
     has_component_indexing_bug = is_amd;
     has_precise_bug = TestPreciseBug();
+    has_broken_texture_view_formats = is_amd || (!is_linux && is_intel);
     has_nv_viewport_array2 = GLAD_GL_NV_viewport_array2;
     has_vertex_buffer_unified_memory = GLAD_GL_NV_vertex_buffer_unified_memory;
     has_debugging_tool_attached = IsDebugToolAttached(extensions);
+    has_depth_buffer_float = HasExtension(extensions, "GL_NV_depth_buffer_float");
 
     // At the moment of writing this, only Nvidia's driver optimizes BufferSubData on exclusive
     // uniform buffers as "push constants"
@@ -243,14 +255,23 @@ Device::Device()
                            GLAD_GL_NV_gpu_program5 && GLAD_GL_NV_compute_program5 &&
                            GLAD_GL_NV_transform_feedback && GLAD_GL_NV_transform_feedback2;
 
-    use_asynchronous_shaders = Settings::values.use_asynchronous_shaders.GetValue();
+    // Blocks AMD and Intel OpenGL drivers on Windows from using asynchronous shader compilation.
+    use_asynchronous_shaders = Settings::values.use_asynchronous_shaders.GetValue() &&
+                               !(is_amd || (is_intel && !is_linux));
+    use_driver_cache = is_nvidia;
 
     LOG_INFO(Render_OpenGL, "Renderer_VariableAOFFI: {}", has_variable_aoffi);
     LOG_INFO(Render_OpenGL, "Renderer_ComponentIndexingBug: {}", has_component_indexing_bug);
     LOG_INFO(Render_OpenGL, "Renderer_PreciseBug: {}", has_precise_bug);
+    LOG_INFO(Render_OpenGL, "Renderer_BrokenTextureViewFormats: {}",
+             has_broken_texture_view_formats);
 
     if (Settings::values.use_assembly_shaders.GetValue() && !use_assembly_shaders) {
         LOG_ERROR(Render_OpenGL, "Assembly shaders enabled but not supported");
+    }
+
+    if (Settings::values.use_asynchronous_shaders.GetValue() && !use_asynchronous_shaders) {
+        LOG_WARNING(Render_OpenGL, "Asynchronous shader compilation enabled but not supported");
     }
 }
 
@@ -267,6 +288,7 @@ Device::Device(std::nullptr_t) {
     has_image_load_formatted = true;
     has_texture_shadow_lod = true;
     has_variable_aoffi = true;
+    has_depth_buffer_float = true;
 }
 
 bool Device::TestVariableAoffi() {

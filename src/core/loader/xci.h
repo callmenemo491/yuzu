@@ -26,33 +26,35 @@ class AppLoader_NCA;
 /// Loads an XCI file
 class AppLoader_XCI final : public AppLoader {
 public:
-    explicit AppLoader_XCI(FileSys::VirtualFile file,
+    explicit AppLoader_XCI(FileSys::VirtualFile file_,
                            const Service::FileSystem::FileSystemController& fsc,
                            const FileSys::ContentProvider& content_provider,
                            std::size_t program_index);
     ~AppLoader_XCI() override;
 
     /**
-     * Returns the type of the file
-     * @param file open file
-     * @return FileType found, or FileType::Error if this loader doesn't know it
+     * Identifies whether or not the given file is an XCI file.
+     *
+     * @param xci_file The file to identify.
+     *
+     * @return FileType::XCI, or FileType::Error if the file is not an XCI file.
      */
-    static FileType IdentifyType(const FileSys::VirtualFile& file);
+    static FileType IdentifyType(const FileSys::VirtualFile& xci_file);
 
     FileType GetFileType() const override {
         return IdentifyType(file);
     }
 
-    LoadResult Load(Kernel::Process& process, Core::System& system) override;
+    LoadResult Load(Kernel::KProcess& process, Core::System& system) override;
 
-    ResultStatus ReadRomFS(FileSys::VirtualFile& file) override;
+    ResultStatus ReadRomFS(FileSys::VirtualFile& out_file) override;
     u64 ReadRomFSIVFCOffset() const override;
-    ResultStatus ReadUpdateRaw(FileSys::VirtualFile& file) override;
+    ResultStatus ReadUpdateRaw(FileSys::VirtualFile& out_file) override;
     ResultStatus ReadProgramId(u64& out_program_id) override;
     ResultStatus ReadIcon(std::vector<u8>& buffer) override;
     ResultStatus ReadTitle(std::string& title) override;
     ResultStatus ReadControlData(FileSys::NACP& control) override;
-    ResultStatus ReadManualRomFS(FileSys::VirtualFile& file) override;
+    ResultStatus ReadManualRomFS(FileSys::VirtualFile& out_file) override;
 
     ResultStatus ReadBanner(std::vector<u8>& buffer) override;
     ResultStatus ReadLogo(std::vector<u8>& buffer) override;

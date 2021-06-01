@@ -6,7 +6,7 @@
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/prepo/prepo.h"
 #include "core/hle/service/service.h"
@@ -23,11 +23,11 @@ public:
             {10101, &PlayReport::SaveReportWithUser<Core::Reporter::PlayReportType::Old>, "SaveReportWithUserOld"},
             {10102, &PlayReport::SaveReport<Core::Reporter::PlayReportType::Old2>, "SaveReportOld2"},
             {10103, &PlayReport::SaveReportWithUser<Core::Reporter::PlayReportType::Old2>, "SaveReportWithUserOld2"},
-            {10104, nullptr, "SaveReport"},
-            {10105, nullptr, "SaveReportWithUser"},
-            {10200, nullptr, "RequestImmediateTransmission"},
-            {10300, nullptr, "GetTransmissionStatus"},
-            {10400, nullptr, "GetSystemSessionId"},
+            {10104, &PlayReport::SaveReport<Core::Reporter::PlayReportType::New>, "SaveReport"},
+            {10105, &PlayReport::SaveReportWithUser<Core::Reporter::PlayReportType::New>, "SaveReportWithUser"},
+            {10200, &PlayReport::RequestImmediateTransmission, "RequestImmediateTransmission"},
+            {10300, &PlayReport::GetTransmissionStatus, "GetTransmissionStatus"},
+            {10400, &PlayReport::GetSystemSessionId, "GetSystemSessionId"},
             {20100, &PlayReport::SaveSystemReport, "SaveSystemReport"},
             {20101, &PlayReport::SaveSystemReportWithUser, "SaveSystemReportWithUser"},
             {20200, nullptr, "SetOperationMode"},
@@ -59,16 +59,22 @@ private:
         IPC::RequestParser rp{ctx};
         const auto process_id = rp.PopRaw<u64>();
 
-        std::vector<std::vector<u8>> data{ctx.ReadBuffer(0)};
-        if constexpr (Type == Core::Reporter::PlayReportType::Old2) {
-            data.emplace_back(ctx.ReadBuffer(1));
-        }
+        const auto data1 = ctx.ReadBuffer(0);
+        const auto data2 = [&ctx] {
+            if (ctx.CanReadBuffer(1)) {
+                return ctx.ReadBuffer(1);
+            }
 
-        LOG_DEBUG(Service_PREPO, "called, type={:02X}, process_id={:016X}, data1_size={:016X}",
-                  Type, process_id, data[0].size());
+            return std::vector<u8>{};
+        }();
+
+        LOG_DEBUG(Service_PREPO,
+                  "called, type={:02X}, process_id={:016X}, data1_size={:016X}, data2_size={:016X}",
+                  Type, process_id, data1.size(), data2.size());
 
         const auto& reporter{system.GetReporter()};
-        reporter.SavePlayReport(Type, system.CurrentProcess()->GetTitleID(), data, process_id);
+        reporter.SavePlayReport(Type, system.CurrentProcess()->GetTitleID(), {data1, data2},
+                                process_id);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
@@ -79,27 +85,53 @@ private:
         IPC::RequestParser rp{ctx};
         const auto user_id = rp.PopRaw<u128>();
         const auto process_id = rp.PopRaw<u64>();
-        std::vector<std::vector<u8>> data{ctx.ReadBuffer(0)};
 
-        if constexpr (Type == Core::Reporter::PlayReportType::Old2) {
-            const auto read_buffer_count =
-                ctx.BufferDescriptorX().size() + ctx.BufferDescriptorA().size();
-            if (read_buffer_count > 1) {
-                data.emplace_back(ctx.ReadBuffer(1));
+        const auto data1 = ctx.ReadBuffer(0);
+        const auto data2 = [&ctx] {
+            if (ctx.CanReadBuffer(1)) {
+                return ctx.ReadBuffer(1);
             }
-        }
 
-        LOG_DEBUG(
-            Service_PREPO,
-            "called, type={:02X}, user_id={:016X}{:016X}, process_id={:016X}, data1_size={:016X}",
-            Type, user_id[1], user_id[0], process_id, data[0].size());
+            return std::vector<u8>{};
+        }();
+
+        LOG_DEBUG(Service_PREPO,
+                  "called, type={:02X}, user_id={:016X}{:016X}, process_id={:016X}, "
+                  "data1_size={:016X}, data2_size={:016X}",
+                  Type, user_id[1], user_id[0], process_id, data1.size(), data2.size());
 
         const auto& reporter{system.GetReporter()};
-        reporter.SavePlayReport(Type, system.CurrentProcess()->GetTitleID(), data, process_id,
-                                user_id);
+        reporter.SavePlayReport(Type, system.CurrentProcess()->GetTitleID(), {data1, data2},
+                                process_id, user_id);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
+    }
+
+    void RequestImmediateTransmission(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_PREPO, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void GetTransmissionStatus(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_PREPO, "(STUBBED) called");
+
+        constexpr s32 status = 0;
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push(status);
+    }
+
+    void GetSystemSessionId(Kernel::HLERequestContext& ctx) {
+        LOG_WARNING(Service_PREPO, "(STUBBED) called");
+
+        constexpr u64 system_session_id = 0;
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push(system_session_id);
     }
 
     void SaveSystemReport(Kernel::HLERequestContext& ctx) {
@@ -107,7 +139,13 @@ private:
         const auto title_id = rp.PopRaw<u64>();
 
         const auto data1 = ctx.ReadBuffer(0);
-        const auto data2 = ctx.ReadBuffer(1);
+        const auto data2 = [&ctx] {
+            if (ctx.CanReadBuffer(1)) {
+                return ctx.ReadBuffer(1);
+            }
+
+            return std::vector<u8>{};
+        }();
 
         LOG_DEBUG(Service_PREPO, "called, title_id={:016X}, data1_size={:016X}, data2_size={:016X}",
                   title_id, data1.size(), data2.size());
@@ -125,7 +163,13 @@ private:
         const auto title_id = rp.PopRaw<u64>();
 
         const auto data1 = ctx.ReadBuffer(0);
-        const auto data2 = ctx.ReadBuffer(1);
+        const auto data2 = [&ctx] {
+            if (ctx.CanReadBuffer(1)) {
+                return ctx.ReadBuffer(1);
+            }
+
+            return std::vector<u8>{};
+        }();
 
         LOG_DEBUG(Service_PREPO,
                   "called, user_id={:016X}{:016X}, title_id={:016X}, data1_size={:016X}, "

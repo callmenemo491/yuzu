@@ -6,9 +6,10 @@
 #include <ctime>
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/nim/nim.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
@@ -124,51 +125,51 @@ public:
             {39, nullptr, "PrepareShutdown"},
             {40, nullptr, "ListApplyDeltaTask"},
             {41, nullptr, "ClearNotEnoughSpaceStateOfApplyDeltaTask"},
-            {42, nullptr, "Unknown42"},
-            {43, nullptr, "Unknown43"},
-            {44, nullptr, "Unknown44"},
-            {45, nullptr, "Unknown45"},
-            {46, nullptr, "Unknown46"},
-            {47, nullptr, "Unknown47"},
-            {48, nullptr, "Unknown48"},
-            {49, nullptr, "Unknown49"},
-            {50, nullptr, "Unknown50"},
-            {51, nullptr, "Unknown51"},
-            {52, nullptr, "Unknown52"},
-            {53, nullptr, "Unknown53"},
-            {54, nullptr, "Unknown54"},
-            {55, nullptr, "Unknown55"},
-            {56, nullptr, "Unknown56"},
-            {57, nullptr, "Unknown57"},
-            {58, nullptr, "Unknown58"},
-            {59, nullptr, "Unknown59"},
-            {60, nullptr, "Unknown60"},
-            {61, nullptr, "Unknown61"},
-            {62, nullptr, "Unknown62"},
-            {63, nullptr, "Unknown63"},
-            {64, nullptr, "Unknown64"},
-            {65, nullptr, "Unknown65"},
-            {66, nullptr, "Unknown66"},
-            {67, nullptr, "Unknown67"},
-            {68, nullptr, "Unknown68"},
-            {69, nullptr, "Unknown69"},
-            {70, nullptr, "Unknown70"},
-            {71, nullptr, "Unknown71"},
-            {72, nullptr, "Unknown72"},
-            {73, nullptr, "Unknown73"},
-            {74, nullptr, "Unknown74"},
-            {75, nullptr, "Unknown75"},
-            {76, nullptr, "Unknown76"},
-            {77, nullptr, "Unknown77"},
-            {78, nullptr, "Unknown78"},
-            {79, nullptr, "Unknown79"},
-            {80, nullptr, "Unknown80"},
-            {81, nullptr, "Unknown81"},
-            {82, nullptr, "Unknown82"},
-            {83, nullptr, "Unknown83"},
+            {42, nullptr, "CreateApplyDeltaTaskFromDownloadTask"},
+            {43, nullptr, "GetBackgroundApplyDeltaStressTaskInfo"},
+            {44, nullptr, "GetApplyDeltaTaskRequiredStorage"},
+            {45, nullptr, "CalculateNetworkInstallTaskContentsSize"},
+            {46, nullptr, "PrepareShutdownForSystemUpdate"},
+            {47, nullptr, "FindMaxRequiredApplicationVersionOfTask"},
+            {48, nullptr, "CommitNetworkInstallTaskPartially"},
+            {49, nullptr, "ListNetworkInstallTaskCommittedContentMeta"},
+            {50, nullptr, "ListNetworkInstallTaskNotCommittedContentMeta"},
+            {51, nullptr, "FindMaxRequiredSystemVersionOfTask"},
+            {52, nullptr, "GetNetworkInstallTaskErrorContext"},
+            {53, nullptr, "CreateLocalCommunicationReceiveApplicationTask"},
+            {54, nullptr, "DestroyLocalCommunicationReceiveApplicationTask"},
+            {55, nullptr, "ListLocalCommunicationReceiveApplicationTask"},
+            {56, nullptr, "RequestLocalCommunicationReceiveApplicationTaskRun"},
+            {57, nullptr, "GetLocalCommunicationReceiveApplicationTaskInfo"},
+            {58, nullptr, "CommitLocalCommunicationReceiveApplicationTask"},
+            {59, nullptr, "ListLocalCommunicationReceiveApplicationTaskContentMeta"},
+            {60, nullptr, "CreateLocalCommunicationSendApplicationTask"},
+            {61, nullptr, "RequestLocalCommunicationSendApplicationTaskRun"},
+            {62, nullptr, "GetLocalCommunicationReceiveApplicationTaskErrorContext"},
+            {63, nullptr, "GetLocalCommunicationSendApplicationTaskInfo"},
+            {64, nullptr, "DestroyLocalCommunicationSendApplicationTask"},
+            {65, nullptr, "GetLocalCommunicationSendApplicationTaskErrorContext"},
+            {66, nullptr, "CalculateLocalCommunicationReceiveApplicationTaskRequiredSize"},
+            {67, nullptr, "ListApplicationLocalCommunicationReceiveApplicationTask"},
+            {68, nullptr, "ListApplicationLocalCommunicationSendApplicationTask"},
+            {69, nullptr, "CreateLocalCommunicationReceiveSystemUpdateTask"},
+            {70, nullptr, "DestroyLocalCommunicationReceiveSystemUpdateTask"},
+            {71, nullptr, "ListLocalCommunicationReceiveSystemUpdateTask"},
+            {72, nullptr, "RequestLocalCommunicationReceiveSystemUpdateTaskRun"},
+            {73, nullptr, "GetLocalCommunicationReceiveSystemUpdateTaskInfo"},
+            {74, nullptr, "CommitLocalCommunicationReceiveSystemUpdateTask"},
+            {75, nullptr, "GetLocalCommunicationReceiveSystemUpdateTaskErrorContext"},
+            {76, nullptr, "CreateLocalCommunicationSendSystemUpdateTask"},
+            {77, nullptr, "RequestLocalCommunicationSendSystemUpdateTaskRun"},
+            {78, nullptr, "GetLocalCommunicationSendSystemUpdateTaskInfo"},
+            {79, nullptr, "DestroyLocalCommunicationSendSystemUpdateTask"},
+            {80, nullptr, "GetLocalCommunicationSendSystemUpdateTaskErrorContext"},
+            {81, nullptr, "ListLocalCommunicationSendSystemUpdateTask"},
+            {82, nullptr, "GetReceivedSystemDataPath"},
+            {83, nullptr, "CalculateApplyDeltaTaskOccupiedSize"},
             {84, nullptr, "Unknown84"},
-            {85, nullptr, "Unknown85"},
-            {86, nullptr, "Unknown86"},
+            {85, nullptr, "ListNetworkInstallTaskContentMetaFromInstallMeta"},
+            {86, nullptr, "ListNetworkInstallTaskOccupiedSize"},
             {87, nullptr, "Unknown87"},
             {88, nullptr, "Unknown88"},
             {89, nullptr, "Unknown89"},
@@ -201,6 +202,17 @@ public:
             {116, nullptr, "Unknown116"},
             {117, nullptr, "Unknown117"},
             {118, nullptr, "Unknown118"},
+            {119, nullptr, "Unknown119"},
+            {120, nullptr, "Unknown120"},
+            {121, nullptr, "Unknown121"},
+            {122, nullptr, "Unknown122"},
+            {123, nullptr, "Unknown123"},
+            {124, nullptr, "Unknown124"},
+            {125, nullptr, "Unknown125"},
+            {126, nullptr, "Unknown126"},
+            {127, nullptr, "Unknown127"},
+            {128, nullptr, "Unknown128"},
+            {129, nullptr, "Unknown129"},
         };
         // clang-format on
 
@@ -288,7 +300,8 @@ class IEnsureNetworkClockAvailabilityService final
     : public ServiceFramework<IEnsureNetworkClockAvailabilityService> {
 public:
     explicit IEnsureNetworkClockAvailabilityService(Core::System& system_)
-        : ServiceFramework{system_, "IEnsureNetworkClockAvailabilityService"} {
+        : ServiceFramework{system_, "IEnsureNetworkClockAvailabilityService"},
+          finished_event{system.Kernel()} {
         static const FunctionInfo functions[] = {
             {0, &IEnsureNetworkClockAvailabilityService::StartTask, "StartTask"},
             {1, &IEnsureNetworkClockAvailabilityService::GetFinishNotificationEvent,
@@ -300,18 +313,17 @@ public:
         };
         RegisterHandlers(functions);
 
-        auto& kernel = system.Kernel();
-        finished_event = Kernel::WritableEvent::CreateEventPair(
-            kernel, "IEnsureNetworkClockAvailabilityService:FinishEvent");
+        Kernel::KAutoObject::Create(std::addressof(finished_event));
+        finished_event.Initialize("IEnsureNetworkClockAvailabilityService:FinishEvent");
     }
 
 private:
-    Kernel::EventPair finished_event;
+    Kernel::KEvent finished_event;
 
     void StartTask(Kernel::HLERequestContext& ctx) {
         // No need to connect to the internet, just finish the task straight away.
         LOG_DEBUG(Service_NIM, "called");
-        finished_event.writable->Signal();
+        finished_event.GetWritableEvent().Signal();
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
@@ -321,7 +333,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(finished_event.readable);
+        rb.PushCopyObjects(finished_event.GetReadableEvent());
     }
 
     void GetResult(Kernel::HLERequestContext& ctx) {
@@ -333,7 +345,7 @@ private:
 
     void Cancel(Kernel::HLERequestContext& ctx) {
         LOG_DEBUG(Service_NIM, "called");
-        finished_event.writable->Clear();
+        finished_event.GetWritableEvent().Clear();
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }

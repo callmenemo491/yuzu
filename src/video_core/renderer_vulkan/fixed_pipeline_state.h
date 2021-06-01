@@ -58,7 +58,7 @@ struct FixedPipelineState {
             BitField<30, 1, u32> enable;
         };
 
-        void Fill(const Maxwell& regs, std::size_t index);
+        void Refresh(const Maxwell& regs, size_t index);
 
         constexpr std::array<bool, 4> Mask() const noexcept {
             return {mask_r != 0, mask_g != 0, mask_b != 0, mask_a != 0};
@@ -106,7 +106,7 @@ struct FixedPipelineState {
         }
     };
 
-    template <std::size_t Position>
+    template <size_t Position>
     union StencilFace {
         BitField<Position + 0, 3, u32> action_stencil_fail;
         BitField<Position + 3, 3, u32> action_depth_fail;
@@ -130,12 +130,6 @@ struct FixedPipelineState {
         }
     };
 
-    union VertexBinding {
-        u16 raw;
-        BitField<0, 12, u16> stride;
-        BitField<12, 1, u16> enabled;
-    };
-
     struct DynamicState {
         union {
             u32 raw1;
@@ -153,9 +147,10 @@ struct FixedPipelineState {
             BitField<0, 2, u32> cull_face;
             BitField<2, 1, u32> cull_enable;
         };
-        std::array<VertexBinding, Maxwell::NumVertexArrays> vertex_bindings;
+        // Vertex stride is a 12 bits value, we have 4 bits to spare per element
+        std::array<u16, Maxwell::NumVertexArrays> vertex_strides;
 
-        void Fill(const Maxwell& regs);
+        void Refresh(const Maxwell& regs);
 
         Maxwell::ComparisonOp DepthTestFunc() const noexcept {
             return UnpackComparisonOp(depth_test_func);
@@ -202,9 +197,9 @@ struct FixedPipelineState {
     std::array<u16, Maxwell::NumViewports> viewport_swizzles;
     DynamicState dynamic_state;
 
-    void Fill(const Maxwell& regs, bool has_extended_dynamic_state);
+    void Refresh(Tegra::Engines::Maxwell3D& maxwell3d, bool has_extended_dynamic_state);
 
-    std::size_t Hash() const noexcept;
+    size_t Hash() const noexcept;
 
     bool operator==(const FixedPipelineState& rhs) const noexcept;
 
@@ -212,8 +207,8 @@ struct FixedPipelineState {
         return !operator==(rhs);
     }
 
-    std::size_t Size() const noexcept {
-        const std::size_t total_size = sizeof *this;
+    size_t Size() const noexcept {
+        const size_t total_size = sizeof *this;
         return total_size - (no_extended_dynamic_state != 0 ? 0 : sizeof(DynamicState));
     }
 };
@@ -227,7 +222,7 @@ namespace std {
 
 template <>
 struct hash<Vulkan::FixedPipelineState> {
-    std::size_t operator()(const Vulkan::FixedPipelineState& k) const noexcept {
+    size_t operator()(const Vulkan::FixedPipelineState& k) const noexcept {
         return k.Hash();
     }
 };

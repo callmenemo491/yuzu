@@ -45,6 +45,28 @@ target_include_directories(microprofile INTERFACE ./microprofile)
 add_library(unicorn-headers INTERFACE)
 target_include_directories(unicorn-headers INTERFACE ./unicorn/include)
 
+# SDL2
+if (NOT SDL2_FOUND AND ENABLE_SDL2)
+    if (NOT WIN32)
+        # Yuzu itself needs: Events Joystick Haptic Sensor Timers
+        # Yuzu-cmd also needs: Video (depends on Loadso/Dlopen)
+        set(SDL_UNUSED_SUBSYSTEMS
+            Atomic Audio Render Power Threads
+            File CPUinfo Filesystem Locale)
+        foreach(_SUB ${SDL_UNUSED_SUBSYSTEMS})
+          string(TOUPPER ${_SUB} _OPT)
+          option(SDL_${_OPT} "" OFF)
+        endforeach()
+
+        option(HIDAPI "" ON)
+    endif()
+    set(SDL_STATIC ON)
+    set(SDL_SHARED OFF)
+
+    add_subdirectory(SDL EXCLUDE_FROM_ALL)
+    add_library(SDL2 ALIAS SDL2-static)
+endif()
+
 # SoundTouch
 add_subdirectory(soundtouch)
 
@@ -64,8 +86,8 @@ endif()
 add_subdirectory(sirit)
 
 # libzip
-find_package(Libzip 1.5)
-if (NOT LIBZIP_FOUND)
+find_package(libzip 1.5)
+if (NOT libzip_FOUND)
     message(STATUS "libzip 1.5 or newer not found, falling back to externals")
     add_subdirectory(libzip EXCLUDE_FROM_ALL)
 endif()
@@ -97,4 +119,8 @@ if (ENABLE_WEB_SERVICE)
 endif()
 
 # Opus
-add_subdirectory(opus)
+find_package(opus 1.3)
+if (NOT opus_FOUND)
+    message(STATUS "opus 1.3 or newer not found, falling back to externals")
+    add_subdirectory(opus EXCLUDE_FROM_ALL)
+endif()

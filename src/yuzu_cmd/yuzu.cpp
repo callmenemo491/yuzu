@@ -10,25 +10,27 @@
 
 #include <fmt/ostream.h>
 
-#include "common/common_paths.h"
 #include "common/detached_tasks.h"
-#include "common/file_util.h"
+#include "common/fs/fs.h"
+#include "common/fs/fs_paths.h"
+#include "common/fs/path_util.h"
 #include "common/logging/backend.h"
 #include "common/logging/filter.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/nvidia_flags.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 #include "common/telemetry.h"
 #include "core/core.h"
 #include "core/crypto/key_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/vfs_real.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/loader.h"
-#include "core/settings.h"
 #include "core/telemetry_session.h"
 #include "input_common/main.h"
 #include "video_core/renderer_base.h"
@@ -73,15 +75,17 @@ static void PrintVersion() {
 }
 
 static void InitializeLogging() {
+    using namespace Common;
+
     Log::Filter log_filter(Log::Level::Debug);
     log_filter.ParseFilterString(Settings::values.log_filter);
     Log::SetGlobalFilter(log_filter);
 
     Log::AddBackend(std::make_unique<Log::ColorConsoleBackend>());
 
-    const std::string& log_dir = Common::FS::GetUserPath(Common::FS::UserPath::LogDir);
-    Common::FS::CreateFullPath(log_dir);
-    Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
+    const auto& log_dir = FS::GetYuzuPath(FS::YuzuPath::LogDir);
+    void(FS::CreateDir(log_dir));
+    Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir / LOG_FILE));
 #ifdef _WIN32
     Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
 #endif
@@ -95,8 +99,6 @@ int main(int argc, char** argv) {
     int option_index = 0;
 
     InitializeLogging();
-
-    char* endarg;
 #ifdef _WIN32
     int argc_w;
     auto argv_w = CommandLineToArgvW(GetCommandLineW(), &argc_w);
@@ -154,6 +156,8 @@ int main(int argc, char** argv) {
     MicroProfileOnThreadCreate("EmuThread");
     SCOPE_EXIT({ MicroProfileShutdown(); });
 
+    Common::ConfigureNvidiaEnvironmentFlags();
+
     if (filepath.empty()) {
         LOG_CRITICAL(Frontend, "Failed to load ROM: No ROM specified");
         return -1;
@@ -163,7 +167,7 @@ int main(int argc, char** argv) {
     InputCommon::InputSubsystem input_subsystem;
 
     // Apply the command line arguments
-    Settings::Apply(system);
+    system.ApplySettings();
 
     std::unique_ptr<EmuWindow_SDL2> emu_window;
     switch (Settings::values.renderer_backend.GetValue()) {
@@ -202,7 +206,7 @@ int main(int argc, char** argv) {
             const u16 loader_id = static_cast<u16>(Core::System::ResultStatus::ErrorLoader);
             const u16 error_id = static_cast<u16>(load_result) - loader_id;
             LOG_CRITICAL(Frontend,
-                         "While attempting to load the ROM requested, an error occured. Please "
+                         "While attempting to load the ROM requested, an error occurred. Please "
                          "refer to the yuzu wiki for more information or the yuzu discord for "
                          "additional help.\n\nError Code: {:04X}-{:04X}\nError Description: {}",
                          loader_id, error_id, static_cast<Loader::ResultStatus>(error_id));
@@ -214,7 +218,7 @@ int main(int argc, char** argv) {
     // Core is loaded, start the GPU (makes the GPU contexts current to this thread)
     system.GPU().Start();
 
-    system.Renderer().Rasterizer().LoadDiskResources(
+    system.Renderer().ReadRasterizer()->LoadDiskResources(
         system.CurrentProcess()->GetTitleID(), false,
         [](VideoCore::LoadCallbackStage, size_t value, size_t total) {});
 

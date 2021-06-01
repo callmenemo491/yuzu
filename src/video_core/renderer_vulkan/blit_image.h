@@ -8,19 +8,18 @@
 
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
-#include "video_core/renderer_vulkan/wrapper.h"
 #include "video_core/texture_cache/types.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
-using VideoCommon::Offset2D;
+using VideoCommon::Region2D;
 
-class VKDevice;
-class VKScheduler;
-class StateTracker;
-
+class Device;
 class Framebuffer;
 class ImageView;
+class StateTracker;
+class VKScheduler;
 
 struct BlitImagePipelineKey {
     constexpr auto operator<=>(const BlitImagePipelineKey&) const noexcept = default;
@@ -31,20 +30,18 @@ struct BlitImagePipelineKey {
 
 class BlitImageHelper {
 public:
-    explicit BlitImageHelper(const VKDevice& device, VKScheduler& scheduler,
+    explicit BlitImageHelper(const Device& device, VKScheduler& scheduler,
                              StateTracker& state_tracker, VKDescriptorPool& descriptor_pool);
     ~BlitImageHelper();
 
     void BlitColor(const Framebuffer* dst_framebuffer, const ImageView& src_image_view,
-                   const std::array<Offset2D, 2>& dst_region,
-                   const std::array<Offset2D, 2>& src_region,
+                   const Region2D& dst_region, const Region2D& src_region,
                    Tegra::Engines::Fermi2D::Filter filter,
                    Tegra::Engines::Fermi2D::Operation operation);
 
     void BlitDepthStencil(const Framebuffer* dst_framebuffer, VkImageView src_depth_view,
-                          VkImageView src_stencil_view, const std::array<Offset2D, 2>& dst_region,
-                          const std::array<Offset2D, 2>& src_region,
-                          Tegra::Engines::Fermi2D::Filter filter,
+                          VkImageView src_stencil_view, const Region2D& dst_region,
+                          const Region2D& src_region, Tegra::Engines::Fermi2D::Filter filter,
                           Tegra::Engines::Fermi2D::Operation operation);
 
     void ConvertD32ToR32(const Framebuffer* dst_framebuffer, const ImageView& src_image_view);
@@ -67,7 +64,7 @@ private:
 
     void ConvertColorToDepthPipeline(vk::Pipeline& pipeline, VkRenderPass renderpass);
 
-    const VKDevice& device;
+    const Device& device;
     VKScheduler& scheduler;
     StateTracker& state_tracker;
 

@@ -13,13 +13,16 @@
 #include "common/common_funcs.h"
 #include "common/math_util.h"
 #include "common/swap.h"
-#include "core/hle/kernel/object.h"
-#include "core/hle/kernel/writable_event.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/service/nvdrv/nvdata.h"
 
 namespace Kernel {
 class KernelCore;
-}
+class KEvent;
+class KReadableEvent;
+class KWritableEvent;
+} // namespace Kernel
 
 namespace Service::NVFlinger {
 
@@ -51,7 +54,7 @@ public:
         NativeWindowFormat = 2,
     };
 
-    explicit BufferQueue(Kernel::KernelCore& kernel, u32 id, u64 layer_id);
+    explicit BufferQueue(Kernel::KernelCore& kernel, u32 id_, u64 layer_id_);
     ~BufferQueue();
 
     enum class BufferTransformFlags : u32 {
@@ -113,9 +116,9 @@ public:
         return is_connect;
     }
 
-    std::shared_ptr<Kernel::WritableEvent> GetWritableBufferWaitEvent() const;
+    Kernel::KWritableEvent& GetWritableBufferWaitEvent();
 
-    std::shared_ptr<Kernel::ReadableEvent> GetBufferWaitEvent() const;
+    Kernel::KReadableEvent& GetBufferWaitEvent();
 
 private:
     BufferQueue(const BufferQueue&) = delete;
@@ -127,10 +130,12 @@ private:
     std::list<u32> free_buffers;
     std::array<Buffer, buffer_slots> buffers;
     std::list<u32> queue_sequence;
-    Kernel::EventPair buffer_wait_event;
+    Kernel::KEvent buffer_wait_event;
 
-    std::mutex queue_mutex;
-    std::condition_variable condition;
+    std::mutex free_buffers_mutex;
+    std::condition_variable free_buffers_condition;
+
+    std::mutex queue_sequence_mutex;
 };
 
 } // namespace Service::NVFlinger

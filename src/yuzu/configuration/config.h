@@ -9,7 +9,7 @@
 #include <string>
 #include <QMetaType>
 #include <QVariant>
-#include "core/settings.h"
+#include "common/settings.h"
 #include "yuzu/uisettings.h"
 
 class QSettings;
@@ -42,7 +42,7 @@ public:
         default_mouse_buttons;
     static const std::array<int, Settings::NativeKeyboard::NumKeyboardKeys> default_keyboard_keys;
     static const std::array<int, Settings::NativeKeyboard::NumKeyboardMods> default_keyboard_mods;
-    static const std::array<UISettings::Shortcut, 16> default_hotkeys;
+    static const std::array<UISettings::Shortcut, 17> default_hotkeys;
 
 private:
     void Initialize(const std::string& config_name);
@@ -131,6 +131,7 @@ private:
     bool global;
 };
 
-// These metatype declarations cannot be in core/settings.h because core is devoid of QT
+// These metatype declarations cannot be in common/settings.h because core is devoid of QT
+Q_DECLARE_METATYPE(Settings::CPUAccuracy);
 Q_DECLARE_METATYPE(Settings::RendererBackend);
 Q_DECLARE_METATYPE(Settings::GPUAccuracy);

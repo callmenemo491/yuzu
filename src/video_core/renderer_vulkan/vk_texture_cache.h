@@ -7,26 +7,27 @@
 #include <compare>
 #include <span>
 
-#include "video_core/renderer_vulkan/vk_memory_manager.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "video_core/vulkan_common/vulkan_memory_allocator.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
 using VideoCommon::ImageId;
 using VideoCommon::NUM_RT;
-using VideoCommon::Offset2D;
+using VideoCommon::Region2D;
 using VideoCommon::RenderTargets;
 using VideoCore::Surface::PixelFormat;
 
-class VKDevice;
-class VKScheduler;
-class VKStagingBufferPool;
-
+class ASTCDecoderPass;
 class BlitImageHelper;
+class Device;
 class Image;
 class ImageView;
 class Framebuffer;
+class StagingBufferPool;
+class VKScheduler;
 
 struct RenderPassKey {
     constexpr auto operator<=>(const RenderPassKey&) const noexcept = default;
@@ -54,39 +55,23 @@ struct hash<Vulkan::RenderPassKey> {
 
 namespace Vulkan {
 
-struct ImageBufferMap {
-    [[nodiscard]] VkBuffer Handle() const noexcept {
-        return handle;
-    }
-
-    [[nodiscard]] std::span<u8> Span() const noexcept {
-        return map.Span();
-    }
-
-    VkBuffer handle;
-    MemoryMap map;
-};
-
 struct TextureCacheRuntime {
-    const VKDevice& device;
+    const Device& device;
     VKScheduler& scheduler;
-    VKMemoryManager& memory_manager;
-    VKStagingBufferPool& staging_buffer_pool;
+    MemoryAllocator& memory_allocator;
+    StagingBufferPool& staging_buffer_pool;
     BlitImageHelper& blit_image_helper;
-    std::unordered_map<RenderPassKey, vk::RenderPass> renderpass_cache;
+    ASTCDecoderPass& astc_decoder_pass;
+    std::unordered_map<RenderPassKey, vk::RenderPass> renderpass_cache{};
 
     void Finish();
 
-    [[nodiscard]] ImageBufferMap MapUploadBuffer(size_t size);
+    [[nodiscard]] StagingBufferRef UploadStagingBuffer(size_t size);
 
-    [[nodiscard]] ImageBufferMap MapDownloadBuffer(size_t size) {
-        // TODO: Have a special function for this
-        return MapUploadBuffer(size);
-    }
+    [[nodiscard]] StagingBufferRef DownloadStagingBuffer(size_t size);
 
     void BlitImage(Framebuffer* dst_framebuffer, ImageView& dst, ImageView& src,
-                   const std::array<Offset2D, 2>& dst_region,
-                   const std::array<Offset2D, 2>& src_region,
+                   const Region2D& dst_region, const Region2D& src_region,
                    Tegra::Engines::Fermi2D::Filter filter,
                    Tegra::Engines::Fermi2D::Operation operation);
 
@@ -98,12 +83,20 @@ struct TextureCacheRuntime {
         return false;
     }
 
-    void AccelerateImageUpload(Image&, const ImageBufferMap&, size_t,
-                               std::span<const VideoCommon::SwizzleParameters>) {
-        UNREACHABLE();
-    }
+    void AccelerateImageUpload(Image&, const StagingBufferRef&,
+                               std::span<const VideoCommon::SwizzleParameters>);
 
     void InsertUploadMemoryBarrier() {}
+
+    bool HasBrokenTextureViewFormats() const noexcept {
+        // No known Vulkan driver has broken image views
+        return false;
+    }
+
+    bool HasNativeBgr() const noexcept {
+        // All known Vulkan drivers can natively handle BGR textures
+        return true;
+    }
 };
 
 class Image : public VideoCommon::ImageBase {
@@ -111,13 +104,12 @@ public:
     explicit Image(TextureCacheRuntime&, const VideoCommon::ImageInfo& info, GPUVAddr gpu_addr,
                    VAddr cpu_addr);
 
-    void UploadMemory(const ImageBufferMap& map, size_t buffer_offset,
+    void UploadMemory(const StagingBufferRef& map,
                       std::span<const VideoCommon::BufferImageCopy> copies);
 
-    void UploadMemory(const ImageBufferMap& map, size_t buffer_offset,
-                      std::span<const VideoCommon::BufferCopy> copies);
+    void UploadMemory(const StagingBufferRef& map, std::span<const VideoCommon::BufferCopy> copies);
 
-    void DownloadMemory(const ImageBufferMap& map, size_t buffer_offset,
+    void DownloadMemory(const StagingBufferRef& map,
                         std::span<const VideoCommon::BufferImageCopy> copies);
 
     [[nodiscard]] VkImage Handle() const noexcept {
@@ -128,15 +120,26 @@ public:
         return *buffer;
     }
 
-    [[nodiscard]] VkImageCreateFlags AspectMask() const noexcept {
+    [[nodiscard]] VkImageAspectFlags AspectMask() const noexcept {
         return aspect_mask;
+    }
+
+    [[nodiscard]] VkImageView StorageImageView(s32 level) const noexcept {
+        return *storage_image_views[level];
+    }
+
+    /// Returns true when the image is already initialized and mark it as initialized
+    [[nodiscard]] bool ExchangeInitialization() noexcept {
+        return std::exchange(initialized, true);
     }
 
 private:
     VKScheduler* scheduler;
     vk::Image image;
     vk::Buffer buffer;
-    VKMemoryCommit commit;
+    MemoryCommit commit;
+    vk::ImageView image_view;
+    std::vector<vk::ImageView> storage_image_views;
     VkImageAspectFlags aspect_mask = 0;
     bool initialized = false;
 };
@@ -177,7 +180,7 @@ public:
 private:
     [[nodiscard]] vk::ImageView MakeDepthStencilView(VkImageAspectFlags aspect_mask);
 
-    const VKDevice* device = nullptr;
+    const Device* device = nullptr;
     std::array<vk::ImageView, VideoCommon::NUM_IMAGE_VIEW_TYPES> image_views;
     vk::ImageView depth_view;
     vk::ImageView stencil_view;

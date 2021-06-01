@@ -4,13 +4,25 @@
 
 #include <memory>
 #include <sstream>
+
+// Ignore -Wimplicit-fallthrough due to https://github.com/libsdl-org/SDL/issues/4307
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wimplicit-fallthrough"
+#endif
 #include <SDL.h>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
 #include <inih/cpp/INIReader.h>
-#include "common/file_util.h"
+#include "common/fs/file.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 #include "common/logging/log.h"
 #include "common/param_package.h"
+#include "common/settings.h"
 #include "core/hle/service/acc/profile_manager.h"
-#include "core/settings.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
 #include "yuzu_cmd/config.h"
@@ -20,8 +32,8 @@ namespace FS = Common::FS;
 
 Config::Config() {
     // TODO: Don't hardcode the path; let the frontend decide where to put the config files.
-    sdl2_config_loc = FS::GetUserPath(FS::UserPath::ConfigDir) + "sdl2-config.ini";
-    sdl2_config = std::make_unique<INIReader>(sdl2_config_loc);
+    sdl2_config_loc = FS::GetYuzuPath(FS::YuzuPath::ConfigDir) / "sdl2-config.ini";
+    sdl2_config = std::make_unique<INIReader>(FS::PathToUTF8String(sdl2_config_loc));
 
     Reload();
 }
@@ -29,20 +41,23 @@ Config::Config() {
 Config::~Config() = default;
 
 bool Config::LoadINI(const std::string& default_contents, bool retry) {
-    const std::string& location = this->sdl2_config_loc;
+    const auto config_loc_str = FS::PathToUTF8String(sdl2_config_loc);
     if (sdl2_config->ParseError() < 0) {
         if (retry) {
-            LOG_WARNING(Config, "Failed to load {}. Creating file from defaults...", location);
-            FS::CreateFullPath(location);
-            FS::WriteStringToFile(true, location, default_contents);
-            sdl2_config = std::make_unique<INIReader>(location); // Reopen file
+            LOG_WARNING(Config, "Failed to load {}. Creating file from defaults...",
+                        config_loc_str);
+
+            void(FS::CreateParentDir(sdl2_config_loc));
+            void(FS::WriteStringToFile(sdl2_config_loc, FS::FileType::TextFile, default_contents));
+
+            sdl2_config = std::make_unique<INIReader>(config_loc_str);
 
             return LoadINI(default_contents, false);
         }
         LOG_ERROR(Config, "Failed.");
         return false;
     }
-    LOG_INFO(Config, "Successfully loaded {}", location);
+    LOG_INFO(Config, "Successfully loaded {}", config_loc_str);
     return true;
 }
 
@@ -296,10 +311,6 @@ void Config::ReadValues() {
         sdl2_config->GetBoolean("ControlsGeneral", "motion_enabled", true));
     Settings::values.touchscreen.enabled =
         sdl2_config->GetBoolean("ControlsGeneral", "touch_enabled", true);
-    Settings::values.touchscreen.device =
-        sdl2_config->Get("ControlsGeneral", "touch_device", "engine:emu_window");
-    Settings::values.touchscreen.finger =
-        sdl2_config->GetInteger("ControlsGeneral", "touch_finger", 0);
     Settings::values.touchscreen.rotation_angle =
         sdl2_config->GetInteger("ControlsGeneral", "touch_angle", 0);
     Settings::values.touchscreen.diameter_x =
@@ -321,21 +332,18 @@ void Config::ReadValues() {
     // Data Storage
     Settings::values.use_virtual_sd =
         sdl2_config->GetBoolean("Data Storage", "use_virtual_sd", true);
-    FS::GetUserPath(
-        FS::UserPath::NANDDir,
-        sdl2_config->Get("Data Storage", "nand_directory", FS::GetUserPath(FS::UserPath::NANDDir)));
-    FS::GetUserPath(
-        FS::UserPath::SDMCDir,
-        sdl2_config->Get("Data Storage", "sdmc_directory", FS::GetUserPath(FS::UserPath::SDMCDir)));
-    FS::GetUserPath(
-        FS::UserPath::LoadDir,
-        sdl2_config->Get("Data Storage", "load_directory", FS::GetUserPath(FS::UserPath::LoadDir)));
-    FS::GetUserPath(
-        FS::UserPath::DumpDir,
-        sdl2_config->Get("Data Storage", "dump_directory", FS::GetUserPath(FS::UserPath::DumpDir)));
-    FS::GetUserPath(FS::UserPath::CacheDir,
-                    sdl2_config->Get("Data Storage", "cache_directory",
-                                     FS::GetUserPath(FS::UserPath::CacheDir)));
+    FS::SetYuzuPath(FS::YuzuPath::NANDDir,
+                    sdl2_config->Get("Data Storage", "nand_directory",
+                                     FS::GetYuzuPathString(FS::YuzuPath::NANDDir)));
+    FS::SetYuzuPath(FS::YuzuPath::SDMCDir,
+                    sdl2_config->Get("Data Storage", "sdmc_directory",
+                                     FS::GetYuzuPathString(FS::YuzuPath::SDMCDir)));
+    FS::SetYuzuPath(FS::YuzuPath::LoadDir,
+                    sdl2_config->Get("Data Storage", "load_directory",
+                                     FS::GetYuzuPathString(FS::YuzuPath::LoadDir)));
+    FS::SetYuzuPath(FS::YuzuPath::DumpDir,
+                    sdl2_config->Get("Data Storage", "dump_directory",
+                                     FS::GetYuzuPathString(FS::YuzuPath::DumpDir)));
     Settings::values.gamecard_inserted =
         sdl2_config->GetBoolean("Data Storage", "gamecard_inserted", false);
     Settings::values.gamecard_current_game =
@@ -344,7 +352,7 @@ void Config::ReadValues() {
 
     // System
     Settings::values.use_docked_mode.SetValue(
-        sdl2_config->GetBoolean("System", "use_docked_mode", false));
+        sdl2_config->GetBoolean("System", "use_docked_mode", true));
 
     Settings::values.current_user = std::clamp<int>(
         sdl2_config->GetInteger("System", "current_user", 0), 0, Service::Account::MAX_USERS - 1);
@@ -358,10 +366,10 @@ void Config::ReadValues() {
 
     const auto custom_rtc_enabled = sdl2_config->GetBoolean("System", "custom_rtc_enabled", false);
     if (custom_rtc_enabled) {
-        Settings::values.custom_rtc.SetValue(
-            std::chrono::seconds(sdl2_config->GetInteger("System", "custom_rtc", 0)));
+        Settings::values.custom_rtc =
+            std::chrono::seconds(sdl2_config->GetInteger("System", "custom_rtc", 0));
     } else {
-        Settings::values.custom_rtc.SetValue(std::nullopt);
+        Settings::values.custom_rtc = std::nullopt;
     }
 
     Settings::values.language_index.SetValue(
@@ -392,7 +400,7 @@ void Config::ReadValues() {
         static_cast<u16>(sdl2_config->GetInteger("Renderer", "frame_limit", 100)));
     Settings::values.use_disk_shader_cache.SetValue(
         sdl2_config->GetBoolean("Renderer", "use_disk_shader_cache", false));
-    const int gpu_accuracy_level = sdl2_config->GetInteger("Renderer", "gpu_accuracy", 0);
+    const int gpu_accuracy_level = sdl2_config->GetInteger("Renderer", "gpu_accuracy", 1);
     Settings::values.gpu_accuracy.SetValue(static_cast<Settings::GPUAccuracy>(gpu_accuracy_level));
     Settings::values.use_asynchronous_gpu_emulation.SetValue(
         sdl2_config->GetBoolean("Renderer", "use_asynchronous_gpu_emulation", true));
@@ -435,6 +443,10 @@ void Config::ReadValues() {
     Settings::values.reporting_services =
         sdl2_config->GetBoolean("Debugging", "reporting_services", false);
     Settings::values.quest_flag = sdl2_config->GetBoolean("Debugging", "quest_flag", false);
+    Settings::values.use_debug_asserts =
+        sdl2_config->GetBoolean("Debugging", "use_debug_asserts", false);
+    Settings::values.use_auto_stub = sdl2_config->GetBoolean("Debugging", "use_auto_stub", false);
+
     Settings::values.disable_macro_jit =
         sdl2_config->GetBoolean("Debugging", "disable_macro_jit", false);
 
@@ -464,7 +476,7 @@ void Config::ReadValues() {
     Settings::values.yuzu_token = sdl2_config->Get("WebService", "yuzu_token", "");
 
     // Services
-    Settings::values.bcat_backend = sdl2_config->Get("Services", "bcat_backend", "null");
+    Settings::values.bcat_backend = sdl2_config->Get("Services", "bcat_backend", "none");
     Settings::values.bcat_boxcat_local =
         sdl2_config->GetBoolean("Services", "bcat_boxcat_local", false);
 }

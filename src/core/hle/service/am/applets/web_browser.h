@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <optional>
 
 #include "common/common_funcs.h"
@@ -25,7 +26,8 @@ namespace Service::AM::Applets {
 
 class WebBrowser final : public Applet {
 public:
-    WebBrowser(Core::System& system_, const Core::Frontend::WebBrowserApplet& frontend_);
+    WebBrowser(Core::System& system_, LibraryAppletMode applet_mode_,
+               const Core::Frontend::WebBrowserApplet& frontend_);
 
     ~WebBrowser() override;
 
@@ -68,15 +70,14 @@ private:
     bool complete{false};
     ResultCode status{RESULT_SUCCESS};
 
-    WebAppletVersion web_applet_version;
-    WebExitReason web_exit_reason;
-    WebArgHeader web_arg_header;
+    WebAppletVersion web_applet_version{};
+    WebArgHeader web_arg_header{};
     WebArgInputTLVMap web_arg_input_tlv_map;
 
-    u64 title_id;
-    FileSys::ContentRecordType nca_type;
-    std::string offline_cache_dir;
-    std::string offline_document;
+    u64 title_id{};
+    FileSys::ContentRecordType nca_type{};
+    std::filesystem::path offline_cache_dir;
+    std::filesystem::path offline_document;
     FileSys::VirtualFile offline_romfs;
 
     std::string external_url;

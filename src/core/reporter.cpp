@@ -11,26 +11,26 @@
 #include <fmt/ostream.h>
 #include <nlohmann/json.hpp>
 
-#include "common/file_util.h"
+#include "common/fs/file.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 #include "common/hex_util.h"
 #include "common/scm_rev.h"
+#include "common/settings.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/hle/kernel/hle_ipc.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/result.h"
-#include "core/hle/service/lm/manager.h"
 #include "core/memory.h"
 #include "core/reporter.h"
-#include "core/settings.h"
 
 namespace {
 
-std::string GetPath(std::string_view type, u64 title_id, std::string_view timestamp) {
-    return fmt::format("{}{}/{:016X}_{}.json",
-                       Common::FS::GetUserPath(Common::FS::UserPath::LogDir), type, title_id,
-                       timestamp);
+std::filesystem::path GetPath(std::string_view type, u64 title_id, std::string_view timestamp) {
+    return Common::FS::GetYuzuPath(Common::FS::YuzuPath::LogDir) / type /
+           fmt::format("{:016X}_{}.json", title_id, timestamp);
 }
 
 std::string GetTimestamp() {
@@ -40,14 +40,16 @@ std::string GetTimestamp() {
 
 using namespace nlohmann;
 
-void SaveToFile(json json, const std::string& filename) {
-    if (!Common::FS::CreateFullPath(filename)) {
-        LOG_ERROR(Core, "Failed to create path for '{}' to save report!", filename);
+void SaveToFile(json json, const std::filesystem::path& filename) {
+    if (!Common::FS::CreateParentDirs(filename)) {
+        LOG_ERROR(Core, "Failed to create path for '{}' to save report!",
+                  Common::FS::PathToUTF8String(filename));
         return;
     }
 
-    std::ofstream file(
-        Common::FS::SanitizePath(filename, Common::FS::DirectorySeparator::PlatformDefault));
+    std::ofstream file;
+    Common::FS::OpenFileStream(file, filename, std::ios_base::out | std::ios_base::trunc);
+
     file << std::setw(4) << json << std::endl;
 }
 
@@ -193,7 +195,7 @@ json GetHLERequestContextData(Kernel::HLERequestContext& ctx, Core::Memory::Memo
 
 namespace Core {
 
-Reporter::Reporter(System& system) : system(system) {}
+Reporter::Reporter(System& system_) : system(system_) {}
 
 Reporter::~Reporter() = default;
 
@@ -358,55 +360,6 @@ void Reporter::SaveErrorReport(u64 title_id, ResultCode result,
     };
 
     SaveToFile(std::move(out), GetPath("error_report", title_id, timestamp));
-}
-
-void Reporter::SaveLogReport(u32 destination, std::vector<Service::LM::LogMessage> messages) const {
-    if (!IsReportingEnabled()) {
-        return;
-    }
-
-    const auto timestamp = GetTimestamp();
-    json out;
-
-    out["yuzu_version"] = GetYuzuVersionData();
-    out["report_common"] =
-        GetReportCommonData(system.CurrentProcess()->GetTitleID(), RESULT_SUCCESS, timestamp);
-
-    out["log_destination"] =
-        fmt::format("{}", static_cast<Service::LM::DestinationFlag>(destination));
-
-    auto json_messages = json::array();
-    std::transform(messages.begin(), messages.end(), std::back_inserter(json_messages),
-                   [](const Service::LM::LogMessage& message) {
-                       json out;
-                       out["is_head"] = fmt::format("{}", message.header.IsHeadLog());
-                       out["is_tail"] = fmt::format("{}", message.header.IsTailLog());
-                       out["pid"] = fmt::format("{:016X}", message.header.pid);
-                       out["thread_context"] =
-                           fmt::format("{:016X}", message.header.thread_context);
-                       out["payload_size"] = fmt::format("{:016X}", message.header.payload_size);
-                       out["flags"] = fmt::format("{:04X}", message.header.flags.Value());
-                       out["severity"] = fmt::format("{}", message.header.severity.Value());
-                       out["verbosity"] = fmt::format("{:02X}", message.header.verbosity);
-
-                       auto fields = json::array();
-                       std::transform(message.fields.begin(), message.fields.end(),
-                                      std::back_inserter(fields), [](const auto& kv) {
-                                          json out;
-                                          out["type"] = fmt::format("{}", kv.first);
-                                          out["data"] =
-                                              Service::LM::FormatField(kv.first, kv.second);
-                                          return out;
-                                      });
-
-                       out["fields"] = std::move(fields);
-                       return out;
-                   });
-
-    out["log_messages"] = std::move(json_messages);
-
-    SaveToFile(std::move(out),
-               GetPath("log_report", system.CurrentProcess()->GetTitleID(), timestamp));
 }
 
 void Reporter::SaveFilesystemAccessReport(Service::FileSystem::LogMode log_mode,

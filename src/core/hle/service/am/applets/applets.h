@@ -6,9 +6,9 @@
 
 #include <memory>
 #include <queue>
+
 #include "common/swap.h"
-#include "core/hle/kernel/object.h"
-#include "core/hle/kernel/writable_event.h"
+#include "core/hle/kernel/k_event.h"
 
 union ResultCode;
 
@@ -29,7 +29,9 @@ class WebBrowserApplet;
 
 namespace Kernel {
 class KernelCore;
-}
+class KEvent;
+class KReadableEvent;
+} // namespace Kernel
 
 namespace Service::AM {
 
@@ -60,9 +62,17 @@ enum class AppletId : u32 {
     MyPage = 0x1A,
 };
 
+enum class LibraryAppletMode : u32 {
+    AllForeground = 0,
+    Background = 1,
+    NoUI = 2,
+    BackgroundIndirectDisplay = 3,
+    AllForegroundInitiallyHidden = 4,
+};
+
 class AppletDataBroker final {
 public:
-    explicit AppletDataBroker(Kernel::KernelCore& kernel_);
+    explicit AppletDataBroker(Core::System& system_, LibraryAppletMode applet_mode_);
     ~AppletDataBroker();
 
     struct RawChannelData {
@@ -85,13 +95,16 @@ public:
     void PushInteractiveDataFromGame(std::shared_ptr<IStorage>&& storage);
     void PushInteractiveDataFromApplet(std::shared_ptr<IStorage>&& storage);
 
-    void SignalStateChanged() const;
+    void SignalStateChanged();
 
-    std::shared_ptr<Kernel::ReadableEvent> GetNormalDataEvent() const;
-    std::shared_ptr<Kernel::ReadableEvent> GetInteractiveDataEvent() const;
-    std::shared_ptr<Kernel::ReadableEvent> GetStateChangedEvent() const;
+    Kernel::KReadableEvent& GetNormalDataEvent();
+    Kernel::KReadableEvent& GetInteractiveDataEvent();
+    Kernel::KReadableEvent& GetStateChangedEvent();
 
 private:
+    Core::System& system;
+    LibraryAppletMode applet_mode;
+
     // Queues are named from applet's perspective
 
     // PopNormalDataToApplet and PushNormalDataFromGame
@@ -106,18 +119,18 @@ private:
     // PopInteractiveDataToGame and PushInteractiveDataFromApplet
     std::deque<std::shared_ptr<IStorage>> out_interactive_channel;
 
-    Kernel::EventPair state_changed_event;
+    Kernel::KEvent state_changed_event;
 
     // Signaled on PushNormalDataFromApplet
-    Kernel::EventPair pop_out_data_event;
+    Kernel::KEvent pop_out_data_event;
 
     // Signaled on PushInteractiveDataFromApplet
-    Kernel::EventPair pop_interactive_out_data_event;
+    Kernel::KEvent pop_interactive_out_data_event;
 };
 
 class Applet {
 public:
-    explicit Applet(Kernel::KernelCore& kernel_);
+    explicit Applet(Core::System& system_, LibraryAppletMode applet_mode_);
     virtual ~Applet();
 
     virtual void Initialize();
@@ -127,16 +140,20 @@ public:
     virtual void ExecuteInteractive() = 0;
     virtual void Execute() = 0;
 
-    bool IsInitialized() const {
-        return initialized;
-    }
-
     AppletDataBroker& GetBroker() {
         return broker;
     }
 
     const AppletDataBroker& GetBroker() const {
         return broker;
+    }
+
+    LibraryAppletMode GetLibraryAppletMode() const {
+        return applet_mode;
+    }
+
+    bool IsInitialized() const {
+        return initialized;
     }
 
 protected:
@@ -152,6 +169,7 @@ protected:
 
     CommonArguments common_args{};
     AppletDataBroker broker;
+    LibraryAppletMode applet_mode;
     bool initialized = false;
 };
 
@@ -198,7 +216,7 @@ public:
     void SetDefaultAppletsIfMissing();
     void ClearAll();
 
-    std::shared_ptr<Applet> GetApplet(AppletId id) const;
+    std::shared_ptr<Applet> GetApplet(AppletId id, LibraryAppletMode mode) const;
 
 private:
     AppletFrontendSet frontend;

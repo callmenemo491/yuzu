@@ -5,16 +5,15 @@
 #include <cinttypes>
 #include <cstring>
 #include "common/common_funcs.h"
-#include "common/file_util.h"
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/romfs_factory.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/process.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/loader/deconstructed_rom_directory.h"
 #include "core/loader/nso.h"
@@ -22,12 +21,12 @@
 namespace Loader {
 
 AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys::VirtualFile file_,
-                                                                         bool override_update)
-    : AppLoader(std::move(file_)), override_update(override_update) {
-    const auto dir = file->GetContainingDirectory();
+                                                                         bool override_update_)
+    : AppLoader(std::move(file_)), override_update(override_update_) {
+    const auto file_dir = file->GetContainingDirectory();
 
     // Title ID
-    const auto npdm = dir->GetFile("main.npdm");
+    const auto npdm = file_dir->GetFile("main.npdm");
     if (npdm != nullptr) {
         const auto res = metadata.Load(npdm);
         if (res == ResultStatus::Success)
@@ -37,7 +36,7 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
     // Icon
     FileSys::VirtualFile icon_file = nullptr;
     for (const auto& language : FileSys::LANGUAGE_NAMES) {
-        icon_file = dir->GetFile("icon_" + std::string(language) + ".dat");
+        icon_file = file_dir->GetFile("icon_" + std::string(language) + ".dat");
         if (icon_file != nullptr) {
             icon_data = icon_file->ReadAllBytes();
             break;
@@ -46,24 +45,23 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
 
     if (icon_data.empty()) {
         // Any png, jpeg, or bmp file
-        const auto& files = dir->GetFiles();
+        const auto& files = file_dir->GetFiles();
         const auto icon_iter =
-            std::find_if(files.begin(), files.end(), [](const FileSys::VirtualFile& file) {
-                return file->GetExtension() == "png" || file->GetExtension() == "jpg" ||
-                       file->GetExtension() == "bmp" || file->GetExtension() == "jpeg";
+            std::find_if(files.begin(), files.end(), [](const FileSys::VirtualFile& f) {
+                return f->GetExtension() == "png" || f->GetExtension() == "jpg" ||
+                       f->GetExtension() == "bmp" || f->GetExtension() == "jpeg";
             });
         if (icon_iter != files.end())
             icon_data = (*icon_iter)->ReadAllBytes();
     }
 
     // Metadata
-    FileSys::VirtualFile nacp_file = dir->GetFile("control.nacp");
+    FileSys::VirtualFile nacp_file = file_dir->GetFile("control.nacp");
     if (nacp_file == nullptr) {
-        const auto& files = dir->GetFiles();
+        const auto& files = file_dir->GetFiles();
         const auto nacp_iter =
-            std::find_if(files.begin(), files.end(), [](const FileSys::VirtualFile& file) {
-                return file->GetExtension() == "nacp";
-            });
+            std::find_if(files.begin(), files.end(),
+                         [](const FileSys::VirtualFile& f) { return f->GetExtension() == "nacp"; });
         if (nacp_iter != files.end())
             nacp_file = *nacp_iter;
     }
@@ -75,12 +73,12 @@ AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(FileSys
 }
 
 AppLoader_DeconstructedRomDirectory::AppLoader_DeconstructedRomDirectory(
-    FileSys::VirtualDir directory, bool override_update)
+    FileSys::VirtualDir directory, bool override_update_)
     : AppLoader(directory->GetFile("main")), dir(std::move(directory)),
-      override_update(override_update) {}
+      override_update(override_update_) {}
 
-FileType AppLoader_DeconstructedRomDirectory::IdentifyType(const FileSys::VirtualFile& file) {
-    if (FileSys::IsDirectoryExeFS(file->GetContainingDirectory())) {
+FileType AppLoader_DeconstructedRomDirectory::IdentifyType(const FileSys::VirtualFile& dir_file) {
+    if (FileSys::IsDirectoryExeFS(dir_file->GetContainingDirectory())) {
         return FileType::DeconstructedRomDirectory;
     }
 
@@ -88,7 +86,7 @@ FileType AppLoader_DeconstructedRomDirectory::IdentifyType(const FileSys::Virtua
 }
 
 AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirectory::Load(
-    Kernel::Process& process, Core::System& system) {
+    Kernel::KProcess& process, Core::System& system) {
     if (is_loaded) {
         return {ResultStatus::ErrorAlreadyLoaded, {}};
     }
@@ -184,8 +182,8 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
     // Find the RomFS by searching for a ".romfs" file in this directory
     const auto& files = dir->GetFiles();
     const auto romfs_iter =
-        std::find_if(files.begin(), files.end(), [](const FileSys::VirtualFile& file) {
-            return file->GetName().find(".romfs") != std::string::npos;
+        std::find_if(files.begin(), files.end(), [](const FileSys::VirtualFile& f) {
+            return f->GetName().find(".romfs") != std::string::npos;
         });
 
     // Register the RomFS if a ".romfs" file was found
@@ -200,17 +198,21 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
             LoadParameters{metadata.GetMainThreadPriority(), metadata.GetMainThreadStackSize()}};
 }
 
-ResultStatus AppLoader_DeconstructedRomDirectory::ReadRomFS(FileSys::VirtualFile& dir) {
-    if (romfs == nullptr)
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadRomFS(FileSys::VirtualFile& out_dir) {
+    if (romfs == nullptr) {
         return ResultStatus::ErrorNoRomFS;
-    dir = romfs;
+    }
+
+    out_dir = romfs;
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_DeconstructedRomDirectory::ReadIcon(std::vector<u8>& buffer) {
-    if (icon_data.empty())
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadIcon(std::vector<u8>& out_buffer) {
+    if (icon_data.empty()) {
         return ResultStatus::ErrorNoIcon;
-    buffer = icon_data;
+    }
+
+    out_buffer = icon_data;
     return ResultStatus::Success;
 }
 
@@ -219,10 +221,12 @@ ResultStatus AppLoader_DeconstructedRomDirectory::ReadProgramId(u64& out_program
     return ResultStatus::Success;
 }
 
-ResultStatus AppLoader_DeconstructedRomDirectory::ReadTitle(std::string& title) {
-    if (name.empty())
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadTitle(std::string& out_title) {
+    if (name.empty()) {
         return ResultStatus::ErrorNoControl;
-    title = name;
+    }
+
+    out_title = name;
     return ResultStatus::Success;
 }
 
@@ -230,12 +234,12 @@ bool AppLoader_DeconstructedRomDirectory::IsRomFSUpdatable() const {
     return false;
 }
 
-ResultStatus AppLoader_DeconstructedRomDirectory::ReadNSOModules(Modules& modules) {
+ResultStatus AppLoader_DeconstructedRomDirectory::ReadNSOModules(Modules& out_modules) {
     if (!is_loaded) {
         return ResultStatus::ErrorNotInitialized;
     }
 
-    modules = this->modules;
+    out_modules = this->modules;
     return ResultStatus::Success;
 }
 

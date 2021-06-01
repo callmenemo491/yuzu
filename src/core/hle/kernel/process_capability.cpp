@@ -2,12 +2,14 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <bit>
+
 #include "common/bit_util.h"
 #include "common/logging/log.h"
-#include "core/hle/kernel/errors.h"
-#include "core/hle/kernel/handle_table.h"
-#include "core/hle/kernel/memory/page_table.h"
+#include "core/hle/kernel/k_handle_table.h"
+#include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/process_capability.h"
+#include "core/hle/kernel/svc_results.h"
 
 namespace Kernel {
 namespace {
@@ -20,6 +22,7 @@ enum : u32 {
     CapabilityOffset_Syscall            = 4,
     CapabilityOffset_MapPhysical        = 6,
     CapabilityOffset_MapIO              = 7,
+    CapabilityOffset_MapRegion          = 10,
     CapabilityOffset_Interrupt          = 11,
     CapabilityOffset_ProgramType        = 13,
     CapabilityOffset_KernelVersion      = 14,
@@ -44,6 +47,7 @@ enum class CapabilityType : u32 {
     Syscall            = (1U << CapabilityOffset_Syscall) - 1,
     MapPhysical        = (1U << CapabilityOffset_MapPhysical) - 1,
     MapIO              = (1U << CapabilityOffset_MapIO) - 1,
+    MapRegion          = (1U << CapabilityOffset_MapRegion) - 1,
     Interrupt          = (1U << CapabilityOffset_Interrupt) - 1,
     ProgramType        = (1U << CapabilityOffset_ProgramType) - 1,
     KernelVersion      = (1U << CapabilityOffset_KernelVersion) - 1,
@@ -60,14 +64,14 @@ constexpr CapabilityType GetCapabilityType(u32 value) {
 
 u32 GetFlagBitOffset(CapabilityType type) {
     const auto value = static_cast<u32>(type);
-    return static_cast<u32>(Common::BitSize<u32>() - Common::CountLeadingZeroes32(value));
+    return static_cast<u32>(Common::BitSize<u32>() - static_cast<u32>(std::countl_zero(value)));
 }
 
 } // Anonymous namespace
 
 ResultCode ProcessCapabilities::InitializeForKernelProcess(const u32* capabilities,
                                                            std::size_t num_capabilities,
-                                                           Memory::PageTable& page_table) {
+                                                           KPageTable& page_table) {
     Clear();
 
     // Allow all cores and priorities.
@@ -80,7 +84,7 @@ ResultCode ProcessCapabilities::InitializeForKernelProcess(const u32* capabiliti
 
 ResultCode ProcessCapabilities::InitializeForUserProcess(const u32* capabilities,
                                                          std::size_t num_capabilities,
-                                                         Memory::PageTable& page_table) {
+                                                         KPageTable& page_table) {
     Clear();
 
     return ParseCapabilities(capabilities, num_capabilities, page_table);
@@ -97,7 +101,7 @@ void ProcessCapabilities::InitializeForMetadatalessProcess() {
     interrupt_capabilities.set();
 
     // Allow using the maximum possible amount of handles
-    handle_table_size = static_cast<s32>(HandleTable::MAX_COUNT);
+    handle_table_size = static_cast<s32>(KHandleTable::MaxTableSize);
 
     // Allow all debugging capabilities.
     is_debuggable = true;
@@ -106,7 +110,7 @@ void ProcessCapabilities::InitializeForMetadatalessProcess() {
 
 ResultCode ProcessCapabilities::ParseCapabilities(const u32* capabilities,
                                                   std::size_t num_capabilities,
-                                                  Memory::PageTable& page_table) {
+                                                  KPageTable& page_table) {
     u32 set_flags = 0;
     u32 set_svc_bits = 0;
 
@@ -121,13 +125,13 @@ ResultCode ProcessCapabilities::ParseCapabilities(const u32* capabilities,
             // If there's only one, then there's a problem.
             if (i >= num_capabilities) {
                 LOG_ERROR(Kernel, "Invalid combination! i={}", i);
-                return ERR_INVALID_COMBINATION;
+                return ResultInvalidCombination;
             }
 
             const auto size_flags = capabilities[i];
             if (GetCapabilityType(size_flags) != CapabilityType::MapPhysical) {
                 LOG_ERROR(Kernel, "Invalid capability type! size_flags={}", size_flags);
-                return ERR_INVALID_COMBINATION;
+                return ResultInvalidCombination;
             }
 
             const auto result = HandleMapPhysicalFlags(descriptor, size_flags, page_table);
@@ -153,11 +157,11 @@ ResultCode ProcessCapabilities::ParseCapabilities(const u32* capabilities,
 }
 
 ResultCode ProcessCapabilities::ParseSingleFlagCapability(u32& set_flags, u32& set_svc_bits,
-                                                          u32 flag, Memory::PageTable& page_table) {
+                                                          u32 flag, KPageTable& page_table) {
     const auto type = GetCapabilityType(flag);
 
     if (type == CapabilityType::Unset) {
-        return ERR_INVALID_CAPABILITY_DESCRIPTOR;
+        return ResultInvalidArgument;
     }
 
     // Bail early on ignorable entries, as one would expect,
@@ -174,7 +178,7 @@ ResultCode ProcessCapabilities::ParseSingleFlagCapability(u32& set_flags, u32& s
         LOG_ERROR(Kernel,
                   "Attempted to initialize flags that may only be initialized once. set_flags={}",
                   set_flags);
-        return ERR_INVALID_COMBINATION;
+        return ResultInvalidCombination;
     }
     set_flags |= set_flag;
 
@@ -185,6 +189,8 @@ ResultCode ProcessCapabilities::ParseSingleFlagCapability(u32& set_flags, u32& s
         return HandleSyscallFlags(set_svc_bits, flag);
     case CapabilityType::MapIO:
         return HandleMapIOFlags(flag, page_table);
+    case CapabilityType::MapRegion:
+        return HandleMapRegionFlags(flag, page_table);
     case CapabilityType::Interrupt:
         return HandleInterruptFlags(flag);
     case CapabilityType::ProgramType:
@@ -200,7 +206,7 @@ ResultCode ProcessCapabilities::ParseSingleFlagCapability(u32& set_flags, u32& s
     }
 
     LOG_ERROR(Kernel, "Invalid capability type! type={}", type);
-    return ERR_INVALID_CAPABILITY_DESCRIPTOR;
+    return ResultInvalidArgument;
 }
 
 void ProcessCapabilities::Clear() {
@@ -223,7 +229,7 @@ ResultCode ProcessCapabilities::HandlePriorityCoreNumFlags(u32 flags) {
     if (priority_mask != 0 || core_mask != 0) {
         LOG_ERROR(Kernel, "Core or priority mask are not zero! priority_mask={}, core_mask={}",
                   priority_mask, core_mask);
-        return ERR_INVALID_CAPABILITY_DESCRIPTOR;
+        return ResultInvalidArgument;
     }
 
     const u32 core_num_min = (flags >> 16) & 0xFF;
@@ -231,7 +237,7 @@ ResultCode ProcessCapabilities::HandlePriorityCoreNumFlags(u32 flags) {
     if (core_num_min > core_num_max) {
         LOG_ERROR(Kernel, "Core min is greater than core max! core_num_min={}, core_num_max={}",
                   core_num_min, core_num_max);
-        return ERR_INVALID_COMBINATION;
+        return ResultInvalidCombination;
     }
 
     const u32 priority_min = (flags >> 10) & 0x3F;
@@ -240,13 +246,13 @@ ResultCode ProcessCapabilities::HandlePriorityCoreNumFlags(u32 flags) {
         LOG_ERROR(Kernel,
                   "Priority min is greater than priority max! priority_min={}, priority_max={}",
                   core_num_min, priority_max);
-        return ERR_INVALID_COMBINATION;
+        return ResultInvalidCombination;
     }
 
     // The switch only has 4 usable cores.
     if (core_num_max >= 4) {
         LOG_ERROR(Kernel, "Invalid max cores specified! core_num_max={}", core_num_max);
-        return ERR_INVALID_PROCESSOR_ID;
+        return ResultInvalidCoreId;
     }
 
     const auto make_mask = [](u64 min, u64 max) {
@@ -267,7 +273,7 @@ ResultCode ProcessCapabilities::HandleSyscallFlags(u32& set_svc_bits, u32 flags)
 
     // If we've already set this svc before, bail.
     if ((set_svc_bits & svc_bit) != 0) {
-        return ERR_INVALID_COMBINATION;
+        return ResultInvalidCombination;
     }
     set_svc_bits |= svc_bit;
 
@@ -279,11 +285,6 @@ ResultCode ProcessCapabilities::HandleSyscallFlags(u32& set_svc_bits, u32 flags)
             continue;
         }
 
-        if (svc_number >= svc_capabilities.size()) {
-            LOG_ERROR(Kernel, "Process svc capability is out of range! svc_number={}", svc_number);
-            return ERR_OUT_OF_RANGE;
-        }
-
         svc_capabilities[svc_number] = true;
     }
 
@@ -291,12 +292,17 @@ ResultCode ProcessCapabilities::HandleSyscallFlags(u32& set_svc_bits, u32 flags)
 }
 
 ResultCode ProcessCapabilities::HandleMapPhysicalFlags(u32 flags, u32 size_flags,
-                                                       Memory::PageTable& page_table) {
+                                                       KPageTable& page_table) {
     // TODO(Lioncache): Implement once the memory manager can handle this.
     return RESULT_SUCCESS;
 }
 
-ResultCode ProcessCapabilities::HandleMapIOFlags(u32 flags, Memory::PageTable& page_table) {
+ResultCode ProcessCapabilities::HandleMapIOFlags(u32 flags, KPageTable& page_table) {
+    // TODO(Lioncache): Implement once the memory manager can handle this.
+    return RESULT_SUCCESS;
+}
+
+ResultCode ProcessCapabilities::HandleMapRegionFlags(u32 flags, KPageTable& page_table) {
     // TODO(Lioncache): Implement once the memory manager can handle this.
     return RESULT_SUCCESS;
 }
@@ -319,7 +325,7 @@ ResultCode ProcessCapabilities::HandleInterruptFlags(u32 flags) {
         if (interrupt >= interrupt_capabilities.size()) {
             LOG_ERROR(Kernel, "Process interrupt capability is out of range! svc_number={}",
                       interrupt);
-            return ERR_OUT_OF_RANGE;
+            return ResultOutOfRange;
         }
 
         interrupt_capabilities[interrupt] = true;
@@ -332,7 +338,7 @@ ResultCode ProcessCapabilities::HandleProgramTypeFlags(u32 flags) {
     const u32 reserved = flags >> 17;
     if (reserved != 0) {
         LOG_ERROR(Kernel, "Reserved value is non-zero! reserved={}", reserved);
-        return ERR_RESERVED_VALUE;
+        return ResultReservedUsed;
     }
 
     program_type = static_cast<ProgramType>((flags >> 14) & 0b111);
@@ -352,7 +358,7 @@ ResultCode ProcessCapabilities::HandleKernelVersionFlags(u32 flags) {
         LOG_ERROR(Kernel,
                   "Kernel version is non zero or flags are too small! major_version={}, flags={}",
                   major_version, flags);
-        return ERR_INVALID_CAPABILITY_DESCRIPTOR;
+        return ResultInvalidArgument;
     }
 
     kernel_version = flags;
@@ -363,7 +369,7 @@ ResultCode ProcessCapabilities::HandleHandleTableFlags(u32 flags) {
     const u32 reserved = flags >> 26;
     if (reserved != 0) {
         LOG_ERROR(Kernel, "Reserved value is non-zero! reserved={}", reserved);
-        return ERR_RESERVED_VALUE;
+        return ResultReservedUsed;
     }
 
     handle_table_size = static_cast<s32>((flags >> 16) & 0x3FF);
@@ -374,7 +380,7 @@ ResultCode ProcessCapabilities::HandleDebugFlags(u32 flags) {
     const u32 reserved = flags >> 19;
     if (reserved != 0) {
         LOG_ERROR(Kernel, "Reserved value is non-zero! reserved={}", reserved);
-        return ERR_RESERVED_VALUE;
+        return ResultReservedUsed;
     }
 
     is_debuggable = (flags & 0x20000) != 0;

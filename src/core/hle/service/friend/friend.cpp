@@ -7,8 +7,9 @@
 #include "common/uuid.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/service/friend/errors.h"
 #include "core/hle/service/friend/friend.h"
 #include "core/hle/service/friend/interface.h"
@@ -37,7 +38,7 @@ public:
             {10600, nullptr, "DeclareOpenOnlinePlaySession"},
             {10601, &IFriendService::DeclareCloseOnlinePlaySession, "DeclareCloseOnlinePlaySession"},
             {10610, &IFriendService::UpdateUserPresence, "UpdateUserPresence"},
-            {10700, nullptr, "GetPlayHistoryRegistrationKey"},
+            {10700, &IFriendService::GetPlayHistoryRegistrationKey, "GetPlayHistoryRegistrationKey"},
             {10701, nullptr, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId"},
             {10702, nullptr, "AddPlayHistory"},
             {11000, nullptr, "GetProfileImageUrl"},
@@ -132,7 +133,7 @@ private:
     void GetBlockedUserListIds(Kernel::HLERequestContext& ctx) {
         // This is safe to stub, as there should be no adverse consequences from reporting no
         // blocked users.
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
+        LOG_WARNING(Service_Friend, "(STUBBED) called");
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(RESULT_SUCCESS);
         rb.Push<u32>(0); // Indicates there are no blocked users
@@ -140,14 +141,26 @@ private:
 
     void DeclareCloseOnlinePlaySession(Kernel::HLERequestContext& ctx) {
         // Stub used by Splatoon 2
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
+        LOG_WARNING(Service_Friend, "(STUBBED) called");
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
 
     void UpdateUserPresence(Kernel::HLERequestContext& ctx) {
         // Stub used by Retro City Rampage
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
+        LOG_WARNING(Service_Friend, "(STUBBED) called");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(RESULT_SUCCESS);
+    }
+
+    void GetPlayHistoryRegistrationKey(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto local_play = rp.Pop<bool>();
+        const auto uuid = rp.PopRaw<Common::UUID>();
+
+        LOG_WARNING(Service_Friend, "(STUBBED) called local_play={} uuid={}", local_play,
+                    uuid.Format());
+
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(RESULT_SUCCESS);
     }
@@ -158,7 +171,7 @@ private:
         const auto uuid = rp.PopRaw<Common::UUID>();
         [[maybe_unused]] const auto filter = rp.PopRaw<SizedFriendFilter>();
         const auto pid = rp.Pop<u64>();
-        LOG_WARNING(Service_ACC, "(STUBBED) called, offset={}, uuid={}, pid={}", friend_offset,
+        LOG_WARNING(Service_Friend, "(STUBBED) called, offset={}, uuid={}, pid={}", friend_offset,
                     uuid.Format(), pid);
 
         IPC::ResponseBuilder rb{ctx, 3};
@@ -172,7 +185,8 @@ private:
 class INotificationService final : public ServiceFramework<INotificationService> {
 public:
     explicit INotificationService(Common::UUID uuid_, Core::System& system_)
-        : ServiceFramework{system_, "INotificationService"}, uuid{uuid_} {
+        : ServiceFramework{system_, "INotificationService"}, uuid{uuid_}, notification_event{
+                                                                              system.Kernel()} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &INotificationService::GetEvent, "GetEvent"},
@@ -183,21 +197,21 @@ public:
 
         RegisterHandlers(functions);
 
-        notification_event = Kernel::WritableEvent::CreateEventPair(
-            system.Kernel(), "INotificationService:NotifyEvent");
+        Kernel::KAutoObject::Create(std::addressof(notification_event));
+        notification_event.Initialize("INotificationService:NotifyEvent");
     }
 
 private:
     void GetEvent(Kernel::HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "called");
+        LOG_DEBUG(Service_Friend, "called");
 
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(notification_event.readable);
+        rb.PushCopyObjects(notification_event.GetReadableEvent());
     }
 
     void Clear(Kernel::HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "called");
+        LOG_DEBUG(Service_Friend, "called");
         while (!notifications.empty()) {
             notifications.pop();
         }
@@ -208,10 +222,10 @@ private:
     }
 
     void Pop(Kernel::HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "called");
+        LOG_DEBUG(Service_Friend, "called");
 
         if (notifications.empty()) {
-            LOG_ERROR(Service_ACC, "No notifications in queue!");
+            LOG_ERROR(Service_Friend, "No notifications in queue!");
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(ERR_NO_NOTIFICATIONS);
             return;
@@ -229,7 +243,8 @@ private:
             break;
         default:
             // HOS seems not have an error case for an unknown notification
-            LOG_WARNING(Service_ACC, "Unknown notification {:08X}", notification.notification_type);
+            LOG_WARNING(Service_Friend, "Unknown notification {:08X}",
+                        notification.notification_type);
             break;
         }
 
@@ -258,7 +273,7 @@ private:
     };
 
     Common::UUID uuid{Common::INVALID_UUID};
-    Kernel::EventPair notification_event;
+    Kernel::KEvent notification_event;
     std::queue<SizedNotificationInfo> notifications;
     States states{};
 };
@@ -267,14 +282,14 @@ void Module::Interface::CreateFriendService(Kernel::HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
     rb.PushIpcInterface<IFriendService>(system);
-    LOG_DEBUG(Service_ACC, "called");
+    LOG_DEBUG(Service_Friend, "called");
 }
 
 void Module::Interface::CreateNotificationService(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     auto uuid = rp.PopRaw<Common::UUID>();
 
-    LOG_DEBUG(Service_ACC, "called, uuid={}", uuid.Format());
+    LOG_DEBUG(Service_Friend, "called, uuid={}", uuid.Format());
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);

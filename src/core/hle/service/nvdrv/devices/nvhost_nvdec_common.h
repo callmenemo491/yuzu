@@ -10,12 +10,16 @@
 #include "common/swap.h"
 #include "core/hle/service/nvdrv/devices/nvdevice.h"
 
-namespace Service::Nvidia::Devices {
+namespace Service::Nvidia {
+class SyncpointManager;
+
+namespace Devices {
 class nvmap;
 
 class nvhost_nvdec_common : public nvdevice {
 public:
-    explicit nvhost_nvdec_common(Core::System& system, std::shared_ptr<nvmap> nvmap_dev);
+    explicit nvhost_nvdec_common(Core::System& system_, std::shared_ptr<nvmap> nvmap_dev_,
+                                 SyncpointManager& syncpoint_manager_);
     ~nvhost_nvdec_common() override;
 
 protected:
@@ -23,13 +27,13 @@ protected:
     public:
         constexpr BufferMap() = default;
 
-        constexpr BufferMap(GPUVAddr start_addr, std::size_t size)
-            : start_addr{start_addr}, end_addr{start_addr + size} {}
+        constexpr BufferMap(GPUVAddr start_addr_, std::size_t size_)
+            : start_addr{start_addr_}, end_addr{start_addr_ + size_} {}
 
-        constexpr BufferMap(GPUVAddr start_addr, std::size_t size, VAddr cpu_addr,
-                            bool is_allocated)
-            : start_addr{start_addr}, end_addr{start_addr + size}, cpu_addr{cpu_addr},
-              is_allocated{is_allocated} {}
+        constexpr BufferMap(GPUVAddr start_addr_, std::size_t size_, VAddr cpu_addr_,
+                            bool is_allocated_)
+            : start_addr{start_addr_}, end_addr{start_addr_ + size_}, cpu_addr{cpu_addr_},
+              is_allocated{is_allocated_} {}
 
         constexpr VAddr StartAddr() const {
             return start_addr;
@@ -157,8 +161,10 @@ protected:
     s32_le nvmap_fd{};
     u32_le submit_timeout{};
     std::shared_ptr<nvmap> nvmap_dev;
-
+    SyncpointManager& syncpoint_manager;
+    std::array<u32, MaxSyncPoints> device_syncpoints{};
     // This is expected to be ordered, therefore we must use a map, not unordered_map
     std::map<GPUVAddr, BufferMap> buffer_mappings;
 };
-}; // namespace Service::Nvidia::Devices
+}; // namespace Devices
+} // namespace Service::Nvidia

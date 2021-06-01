@@ -15,12 +15,13 @@
 #include "common/common_funcs.h"
 #include "common/logging/log.h"
 #include "common/math_util.h"
+#include "common/settings.h"
 #include "common/swap.h"
 #include "core/core_timing.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/thread.h"
-#include "core/hle/kernel/writable_event.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_thread.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/service/nvdrv/nvdata.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvflinger/buffer_queue.h"
@@ -30,7 +31,6 @@
 #include "core/hle/service/vi/vi_m.h"
 #include "core/hle/service/vi/vi_s.h"
 #include "core/hle/service/vi/vi_u.h"
-#include "core/settings.h"
 
 namespace Service::VI {
 
@@ -212,7 +212,7 @@ private:
 
 class IGBPConnectRequestParcel : public Parcel {
 public:
-    explicit IGBPConnectRequestParcel(std::vector<u8> buffer) : Parcel(std::move(buffer)) {
+    explicit IGBPConnectRequestParcel(std::vector<u8> buffer_) : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -274,8 +274,8 @@ private:
 
 class IGBPSetPreallocatedBufferRequestParcel : public Parcel {
 public:
-    explicit IGBPSetPreallocatedBufferRequestParcel(std::vector<u8> buffer)
-        : Parcel(std::move(buffer)) {
+    explicit IGBPSetPreallocatedBufferRequestParcel(std::vector<u8> buffer_)
+        : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -312,7 +312,7 @@ protected:
 
 class IGBPCancelBufferRequestParcel : public Parcel {
 public:
-    explicit IGBPCancelBufferRequestParcel(std::vector<u8> buffer) : Parcel(std::move(buffer)) {
+    explicit IGBPCancelBufferRequestParcel(std::vector<u8> buffer_) : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -338,7 +338,7 @@ protected:
 
 class IGBPDequeueBufferRequestParcel : public Parcel {
 public:
-    explicit IGBPDequeueBufferRequestParcel(std::vector<u8> buffer) : Parcel(std::move(buffer)) {
+    explicit IGBPDequeueBufferRequestParcel(std::vector<u8> buffer_) : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -360,8 +360,8 @@ public:
 
 class IGBPDequeueBufferResponseParcel : public Parcel {
 public:
-    explicit IGBPDequeueBufferResponseParcel(u32 slot, Service::Nvidia::MultiFence& multi_fence)
-        : slot(slot), multi_fence(multi_fence) {}
+    explicit IGBPDequeueBufferResponseParcel(u32 slot_, Nvidia::MultiFence& multi_fence_)
+        : slot(slot_), multi_fence(multi_fence_) {}
 
 protected:
     void SerializeData() override {
@@ -377,7 +377,7 @@ protected:
 
 class IGBPRequestBufferRequestParcel : public Parcel {
 public:
-    explicit IGBPRequestBufferRequestParcel(std::vector<u8> buffer) : Parcel(std::move(buffer)) {
+    explicit IGBPRequestBufferRequestParcel(std::vector<u8> buffer_) : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -391,7 +391,7 @@ public:
 
 class IGBPRequestBufferResponseParcel : public Parcel {
 public:
-    explicit IGBPRequestBufferResponseParcel(NVFlinger::IGBPBuffer buffer) : buffer(buffer) {}
+    explicit IGBPRequestBufferResponseParcel(NVFlinger::IGBPBuffer buffer_) : buffer(buffer_) {}
     ~IGBPRequestBufferResponseParcel() override = default;
 
 protected:
@@ -408,7 +408,7 @@ protected:
 
 class IGBPQueueBufferRequestParcel : public Parcel {
 public:
-    explicit IGBPQueueBufferRequestParcel(std::vector<u8> buffer) : Parcel(std::move(buffer)) {
+    explicit IGBPQueueBufferRequestParcel(std::vector<u8> buffer_) : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -470,7 +470,7 @@ private:
 
 class IGBPQueryRequestParcel : public Parcel {
 public:
-    explicit IGBPQueryRequestParcel(std::vector<u8> buffer) : Parcel(std::move(buffer)) {
+    explicit IGBPQueryRequestParcel(std::vector<u8> buffer_) : Parcel(std::move(buffer_)) {
         Deserialize();
     }
 
@@ -484,7 +484,7 @@ public:
 
 class IGBPQueryResponseParcel : public Parcel {
 public:
-    explicit IGBPQueryResponseParcel(u32 value) : value(value) {}
+    explicit IGBPQueryResponseParcel(u32 value_) : value{value_} {}
     ~IGBPQueryResponseParcel() override = default;
 
 protected:
@@ -669,12 +669,10 @@ private:
 
         LOG_WARNING(Service_VI, "(STUBBED) called id={}, unknown={:08X}", id, unknown);
 
-        const auto& buffer_queue = *nv_flinger.FindBufferQueue(id);
-
         // TODO(Subv): Find out what this actually is.
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(buffer_queue.GetBufferWaitEvent());
+        rb.PushCopyObjects(nv_flinger.FindBufferQueue(id)->GetBufferWaitEvent());
     }
 
     NVFlinger::NVFlinger& nv_flinger;
@@ -695,6 +693,7 @@ public:
             {2205, &ISystemDisplayService::SetLayerZ, "SetLayerZ"},
             {2207, &ISystemDisplayService::SetLayerVisibility, "SetLayerVisibility"},
             {2209, nullptr, "SetLayerAlpha"},
+            {2210, nullptr, "SetLayerPositionAndSize"},
             {2312, nullptr, "CreateStrayLayer"},
             {2400, nullptr, "OpenIndirectLayer"},
             {2401, nullptr, "CloseIndirectLayer"},
@@ -718,6 +717,7 @@ public:
             {3215, nullptr, "SetDisplayGamma"},
             {3216, nullptr, "GetDisplayCmuLuma"},
             {3217, nullptr, "SetDisplayCmuLuma"},
+            {3218, nullptr, "SetDisplayCrcMode"},
             {6013, nullptr, "GetLayerPresentationSubmissionTimestamps"},
             {8225, nullptr, "GetSharedBufferMemoryHandleId"},
             {8250, nullptr, "OpenSharedLayer"},
@@ -729,6 +729,7 @@ public:
             {8256, nullptr, "GetSharedFrameBufferAcquirableEvent"},
             {8257, nullptr, "FillSharedFrameBufferColor"},
             {8258, nullptr, "CancelSharedFrameBuffer"},
+            {9000, nullptr, "GetDp2hdmiController"},
         };
         RegisterHandlers(functions);
     }
@@ -808,10 +809,15 @@ public:
             {2402, nullptr, "GetDisplayHotplugState"},
             {2501, nullptr, "GetCompositorErrorInfo"},
             {2601, nullptr, "GetDisplayErrorEvent"},
+            {2701, nullptr, "GetDisplayFatalErrorEvent"},
             {4201, nullptr, "SetDisplayAlpha"},
             {4203, nullptr, "SetDisplayLayerStack"},
             {4205, nullptr, "SetDisplayPowerState"},
             {4206, nullptr, "SetDefaultDisplay"},
+            {4207, nullptr, "ResetDisplayPanel"},
+            {4208, nullptr, "SetDisplayFatalErrorEnabled"},
+            {4209, nullptr, "IsDisplayPanelOn"},
+            {4300, nullptr, "GetInternalPanelId"},
             {6000, &IManagerDisplayService::AddToLayerStack, "AddToLayerStack"},
             {6001, nullptr, "RemoveFromLayerStack"},
             {6002, &IManagerDisplayService::SetLayerVisibility, "SetLayerVisibility"},
@@ -1121,9 +1127,11 @@ private:
         }
 
         NativeWindow native_window{*buffer_queue_id};
+        const auto buffer_size = ctx.WriteBuffer(native_window.Serialize());
+
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(RESULT_SUCCESS);
-        rb.Push<u64>(ctx.WriteBuffer(native_window.Serialize()));
+        rb.Push<u64>(buffer_size);
     }
 
     void CloseLayer(Kernel::HLERequestContext& ctx) {
@@ -1165,10 +1173,12 @@ private:
         }
 
         NativeWindow native_window{*buffer_queue_id};
+        const auto buffer_size = ctx.WriteBuffer(native_window.Serialize());
+
         IPC::ResponseBuilder rb{ctx, 6};
         rb.Push(RESULT_SUCCESS);
         rb.Push(*layer_id);
-        rb.Push<u64>(ctx.WriteBuffer(native_window.Serialize()));
+        rb.Push<u64>(buffer_size);
     }
 
     void DestroyStrayLayer(Kernel::HLERequestContext& ctx) {
@@ -1215,6 +1225,32 @@ private:
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(converted_mode.Code());
         }
+    }
+
+    void GetIndirectLayerImageMap(Kernel::HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto width = rp.Pop<s64>();
+        const auto height = rp.Pop<s64>();
+        const auto indirect_layer_consumer_handle = rp.Pop<u64>();
+        const auto applet_resource_user_id = rp.Pop<u64>();
+
+        LOG_WARNING(Service_VI,
+                    "(STUBBED) called, width={}, height={}, indirect_layer_consumer_handle={}, "
+                    "applet_resource_user_id={}",
+                    width, height, indirect_layer_consumer_handle, applet_resource_user_id);
+
+        std::vector<u8> out_buffer(0x46);
+        ctx.WriteBuffer(out_buffer);
+
+        // TODO: Figure out what these are
+
+        constexpr s64 unknown_result_1 = 0;
+        constexpr s64 unknown_result_2 = 0;
+
+        IPC::ResponseBuilder rb{ctx, 6};
+        rb.Push(unknown_result_1);
+        rb.Push(unknown_result_2);
+        rb.Push(RESULT_SUCCESS);
     }
 
     void GetIndirectLayerImageRequiredMemoryInfo(Kernel::HLERequestContext& ctx) {
@@ -1276,7 +1312,7 @@ IApplicationDisplayService::IApplicationDisplayService(Core::System& system_,
         {2031, &IApplicationDisplayService::DestroyStrayLayer, "DestroyStrayLayer"},
         {2101, &IApplicationDisplayService::SetLayerScalingMode, "SetLayerScalingMode"},
         {2102, &IApplicationDisplayService::ConvertScalingMode, "ConvertScalingMode"},
-        {2450, nullptr, "GetIndirectLayerImageMap"},
+        {2450, &IApplicationDisplayService::GetIndirectLayerImageMap, "GetIndirectLayerImageMap"},
         {2451, nullptr, "GetIndirectLayerImageCropMap"},
         {2460, &IApplicationDisplayService::GetIndirectLayerImageRequiredMemoryInfo,
          "GetIndirectLayerImageRequiredMemoryInfo"},

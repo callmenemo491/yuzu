@@ -5,8 +5,8 @@
 #include <array>
 #include <QKeySequence>
 #include <QSettings>
-#include "common/common_paths.h"
-#include "common/file_util.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 #include "core/core.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/hid/controllers/npad.h"
@@ -29,9 +29,10 @@ Config::~Config() {
 }
 
 const std::array<int, Settings::NativeButton::NumButtons> Config::default_buttons = {
-    Qt::Key_A, Qt::Key_S, Qt::Key_Z, Qt::Key_X, Qt::Key_3, Qt::Key_4, Qt::Key_Q,
-    Qt::Key_W, Qt::Key_1, Qt::Key_2, Qt::Key_N, Qt::Key_M, Qt::Key_F, Qt::Key_T,
-    Qt::Key_H, Qt::Key_G, Qt::Key_D, Qt::Key_C, Qt::Key_B, Qt::Key_V,
+    Qt::Key_C,    Qt::Key_X, Qt::Key_V,    Qt::Key_Z,  Qt::Key_F,
+    Qt::Key_G,    Qt::Key_Q, Qt::Key_E,    Qt::Key_R,  Qt::Key_T,
+    Qt::Key_M,    Qt::Key_N, Qt::Key_Left, Qt::Key_Up, Qt::Key_Right,
+    Qt::Key_Down, Qt::Key_Q, Qt::Key_E,    0,          0,
 };
 
 const std::array<int, Settings::NativeMotion::NumMotions> Config::default_motions = {
@@ -41,10 +42,10 @@ const std::array<int, Settings::NativeMotion::NumMotions> Config::default_motion
 
 const std::array<std::array<int, 4>, Settings::NativeAnalog::NumAnalogs> Config::default_analogs{{
     {
-        Qt::Key_Up,
-        Qt::Key_Down,
-        Qt::Key_Left,
-        Qt::Key_Right,
+        Qt::Key_W,
+        Qt::Key_S,
+        Qt::Key_A,
+        Qt::Key_D,
     },
     {
         Qt::Key_I,
@@ -55,8 +56,8 @@ const std::array<std::array<int, 4>, Settings::NativeAnalog::NumAnalogs> Config:
 }};
 
 const std::array<int, 2> Config::default_stick_mod = {
-    Qt::Key_E,
-    Qt::Key_R,
+    Qt::Key_Shift,
+    0,
 };
 
 const std::array<int, Settings::NativeMouseButton::NumMouseButtons> Config::default_mouse_buttons =
@@ -220,7 +221,7 @@ const std::array<int, Settings::NativeKeyboard::NumKeyboardMods> Config::default
 // This must be in alphabetical order according to action name as it must have the same order as
 // UISetting::values.shortcuts, which is alphabetically ordered.
 // clang-format off
-const std::array<UISettings::Shortcut, 16> Config::default_hotkeys{{
+const std::array<UISettings::Shortcut, 17> Config::default_hotkeys{{
     {QStringLiteral("Capture Screenshot"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+P"), Qt::WidgetWithChildrenShortcut}},
     {QStringLiteral("Change Docked Mode"),       QStringLiteral("Main Window"), {QStringLiteral("F10"), Qt::ApplicationShortcut}},
     {QStringLiteral("Continue/Pause Emulation"), QStringLiteral("Main Window"), {QStringLiteral("F4"), Qt::WindowShortcut}},
@@ -235,33 +236,34 @@ const std::array<UISettings::Shortcut, 16> Config::default_hotkeys{{
     {QStringLiteral("Restart Emulation"),        QStringLiteral("Main Window"), {QStringLiteral("F6"), Qt::WindowShortcut}},
     {QStringLiteral("Stop Emulation"),           QStringLiteral("Main Window"), {QStringLiteral("F5"), Qt::WindowShortcut}},
     {QStringLiteral("Toggle Filter Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F"), Qt::WindowShortcut}},
+    {QStringLiteral("Toggle Mouse Panning"),     QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F9"), Qt::ApplicationShortcut}},
     {QStringLiteral("Toggle Speed Limit"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Z"), Qt::ApplicationShortcut}},
     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), Qt::WindowShortcut}},
 }};
 // clang-format on
 
 void Config::Initialize(const std::string& config_name) {
+    const auto fs_config_loc = FS::GetYuzuPath(FS::YuzuPath::ConfigDir);
+    const auto config_file = fmt::format("{}.ini", config_name);
+
     switch (type) {
     case ConfigType::GlobalConfig:
-        qt_config_loc = fmt::format("{}" DIR_SEP "{}.ini", FS::GetUserPath(FS::UserPath::ConfigDir),
-                                    config_name);
-        FS::CreateFullPath(qt_config_loc);
+        qt_config_loc = FS::PathToUTF8String(fs_config_loc / config_file);
+        void(FS::CreateParentDir(qt_config_loc));
         qt_config = std::make_unique<QSettings>(QString::fromStdString(qt_config_loc),
                                                 QSettings::IniFormat);
         Reload();
         break;
     case ConfigType::PerGameConfig:
-        qt_config_loc = fmt::format("{}custom" DIR_SEP "{}.ini",
-                                    FS::GetUserPath(FS::UserPath::ConfigDir), config_name);
-        FS::CreateFullPath(qt_config_loc);
+        qt_config_loc = FS::PathToUTF8String(fs_config_loc / "custom" / config_file);
+        void(FS::CreateParentDir(qt_config_loc));
         qt_config = std::make_unique<QSettings>(QString::fromStdString(qt_config_loc),
                                                 QSettings::IniFormat);
         Reload();
         break;
     case ConfigType::InputProfile:
-        qt_config_loc = fmt::format("{}input" DIR_SEP "{}.ini",
-                                    FS::GetUserPath(FS::UserPath::ConfigDir), config_name);
-        FS::CreateFullPath(qt_config_loc);
+        qt_config_loc = FS::PathToUTF8String(fs_config_loc / "input" / config_file);
+        void(FS::CreateParentDir(qt_config_loc));
         qt_config = std::make_unique<QSettings>(QString::fromStdString(qt_config_loc),
                                                 QSettings::IniFormat);
         break;
@@ -464,13 +466,7 @@ void Config::ReadMouseValues() {
 void Config::ReadTouchscreenValues() {
     Settings::values.touchscreen.enabled =
         ReadSetting(QStringLiteral("touchscreen_enabled"), true).toBool();
-    Settings::values.touchscreen.device =
-        ReadSetting(QStringLiteral("touchscreen_device"), QStringLiteral("engine:emu_window"))
-            .toString()
-            .toStdString();
 
-    Settings::values.touchscreen.finger =
-        ReadSetting(QStringLiteral("touchscreen_finger"), 0).toUInt();
     Settings::values.touchscreen.rotation_angle =
         ReadSetting(QStringLiteral("touchscreen_angle"), 0).toUInt();
     Settings::values.touchscreen.diameter_x =
@@ -513,8 +509,18 @@ void Config::ReadControlValues() {
 
     Settings::values.emulate_analog_keyboard =
         ReadSetting(QStringLiteral("emulate_analog_keyboard"), false).toBool();
+    Settings::values.mouse_panning = false;
+    Settings::values.mouse_panning_sensitivity =
+        ReadSetting(QStringLiteral("mouse_panning_sensitivity"), 1).toFloat();
 
-    ReadSettingGlobal(Settings::values.use_docked_mode, QStringLiteral("use_docked_mode"), false);
+    ReadSettingGlobal(Settings::values.use_docked_mode, QStringLiteral("use_docked_mode"), true);
+
+    // Disable docked mode if handheld is selected
+    const auto controller_type = Settings::values.players.GetValue()[0].controller_type;
+    if (controller_type == Settings::ControllerType::Handheld) {
+        Settings::values.use_docked_mode.SetValue(false);
+    }
+
     ReadSettingGlobal(Settings::values.vibration_enabled, QStringLiteral("vibration_enabled"),
                       true);
     ReadSettingGlobal(Settings::values.enable_accurate_vibrations,
@@ -563,7 +569,8 @@ void Config::ReadMotionTouchValues() {
             .toString()
             .toStdString();
     Settings::values.touch_device =
-        ReadSetting(QStringLiteral("touch_device"), QStringLiteral("engine:emu_window"))
+        ReadSetting(QStringLiteral("touch_device"),
+                    QStringLiteral("min_x:100,min_y:50,max_x:1800,max_y:850"))
             .toString()
             .toStdString();
     Settings::values.use_touch_from_button =
@@ -591,36 +598,34 @@ void Config::ReadDataStorageValues() {
     qt_config->beginGroup(QStringLiteral("Data Storage"));
 
     Settings::values.use_virtual_sd = ReadSetting(QStringLiteral("use_virtual_sd"), true).toBool();
-    FS::GetUserPath(FS::UserPath::NANDDir,
-                    qt_config
-                        ->value(QStringLiteral("nand_directory"),
-                                QString::fromStdString(FS::GetUserPath(FS::UserPath::NANDDir)))
-                        .toString()
-                        .toStdString());
-    FS::GetUserPath(FS::UserPath::SDMCDir,
-                    qt_config
-                        ->value(QStringLiteral("sdmc_directory"),
-                                QString::fromStdString(FS::GetUserPath(FS::UserPath::SDMCDir)))
-                        .toString()
-                        .toStdString());
-    FS::GetUserPath(FS::UserPath::LoadDir,
-                    qt_config
-                        ->value(QStringLiteral("load_directory"),
-                                QString::fromStdString(FS::GetUserPath(FS::UserPath::LoadDir)))
-                        .toString()
-                        .toStdString());
-    FS::GetUserPath(FS::UserPath::DumpDir,
-                    qt_config
-                        ->value(QStringLiteral("dump_directory"),
-                                QString::fromStdString(FS::GetUserPath(FS::UserPath::DumpDir)))
-                        .toString()
-                        .toStdString());
-    FS::GetUserPath(FS::UserPath::CacheDir,
-                    qt_config
-                        ->value(QStringLiteral("cache_directory"),
-                                QString::fromStdString(FS::GetUserPath(FS::UserPath::CacheDir)))
-                        .toString()
-                        .toStdString());
+    FS::SetYuzuPath(
+        FS::YuzuPath::NANDDir,
+        qt_config
+            ->value(QStringLiteral("nand_directory"),
+                    QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::NANDDir)))
+            .toString()
+            .toStdString());
+    FS::SetYuzuPath(
+        FS::YuzuPath::SDMCDir,
+        qt_config
+            ->value(QStringLiteral("sdmc_directory"),
+                    QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::SDMCDir)))
+            .toString()
+            .toStdString());
+    FS::SetYuzuPath(
+        FS::YuzuPath::LoadDir,
+        qt_config
+            ->value(QStringLiteral("load_directory"),
+                    QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::LoadDir)))
+            .toString()
+            .toStdString());
+    FS::SetYuzuPath(
+        FS::YuzuPath::DumpDir,
+        qt_config
+            ->value(QStringLiteral("dump_directory"),
+                    QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::DumpDir)))
+            .toString()
+            .toStdString());
     Settings::values.gamecard_inserted =
         ReadSetting(QStringLiteral("gamecard_inserted"), false).toBool();
     Settings::values.gamecard_current_game =
@@ -648,6 +653,9 @@ void Config::ReadDebuggingValues() {
         ReadSetting(QStringLiteral("disable_macro_jit"), false).toBool();
     Settings::values.extended_logging =
         ReadSetting(QStringLiteral("extended_logging"), false).toBool();
+    Settings::values.use_debug_asserts =
+        ReadSetting(QStringLiteral("use_debug_asserts"), false).toBool();
+    Settings::values.use_auto_stub = ReadSetting(QStringLiteral("use_auto_stub"), false).toBool();
 
     qt_config->endGroup();
 }
@@ -655,7 +663,7 @@ void Config::ReadDebuggingValues() {
 void Config::ReadServiceValues() {
     qt_config->beginGroup(QStringLiteral("Services"));
     Settings::values.bcat_backend =
-        ReadSetting(QStringLiteral("bcat_backend"), QStringLiteral("null"))
+        ReadSetting(QStringLiteral("bcat_backend"), QStringLiteral("none"))
             .toString()
             .toStdString();
     Settings::values.bcat_boxcat_local =
@@ -739,10 +747,16 @@ void Config::ReadPathValues() {
 void Config::ReadCpuValues() {
     qt_config->beginGroup(QStringLiteral("Cpu"));
 
-    if (global) {
-        Settings::values.cpu_accuracy = static_cast<Settings::CPUAccuracy>(
-            ReadSetting(QStringLiteral("cpu_accuracy"), 0).toInt());
+    ReadSettingGlobal(Settings::values.cpu_accuracy, QStringLiteral("cpu_accuracy"), 0);
 
+    ReadSettingGlobal(Settings::values.cpuopt_unsafe_unfuse_fma,
+                      QStringLiteral("cpuopt_unsafe_unfuse_fma"), true);
+    ReadSettingGlobal(Settings::values.cpuopt_unsafe_reduce_fp_error,
+                      QStringLiteral("cpuopt_unsafe_reduce_fp_error"), true);
+    ReadSettingGlobal(Settings::values.cpuopt_unsafe_inaccurate_nan,
+                      QStringLiteral("cpuopt_unsafe_inaccurate_nan"), true);
+
+    if (global) {
         Settings::values.cpuopt_page_tables =
             ReadSetting(QStringLiteral("cpuopt_page_tables"), true).toBool();
         Settings::values.cpuopt_block_linking =
@@ -759,11 +773,6 @@ void Config::ReadCpuValues() {
             ReadSetting(QStringLiteral("cpuopt_misc_ir"), true).toBool();
         Settings::values.cpuopt_reduce_misalign_checks =
             ReadSetting(QStringLiteral("cpuopt_reduce_misalign_checks"), true).toBool();
-
-        Settings::values.cpuopt_unsafe_unfuse_fma =
-            ReadSetting(QStringLiteral("cpuopt_unsafe_unfuse_fma"), true).toBool();
-        Settings::values.cpuopt_unsafe_reduce_fp_error =
-            ReadSetting(QStringLiteral("cpuopt_unsafe_reduce_fp_error"), true).toBool();
     }
 
     qt_config->endGroup();
@@ -775,20 +784,27 @@ void Config::ReadRendererValues() {
     ReadSettingGlobal(Settings::values.renderer_backend, QStringLiteral("backend"), 0);
     ReadSettingGlobal(Settings::values.renderer_debug, QStringLiteral("debug"), false);
     ReadSettingGlobal(Settings::values.vulkan_device, QStringLiteral("vulkan_device"), 0);
+#ifdef _WIN32
+    ReadSettingGlobal(Settings::values.fullscreen_mode, QStringLiteral("fullscreen_mode"), 0);
+#else
+    // *nix platforms may have issues with the borderless windowed fullscreen mode.
+    // Default to exclusive fullscreen on these platforms for now.
+    ReadSettingGlobal(Settings::values.fullscreen_mode, QStringLiteral("fullscreen_mode"), 1);
+#endif
     ReadSettingGlobal(Settings::values.aspect_ratio, QStringLiteral("aspect_ratio"), 0);
     ReadSettingGlobal(Settings::values.max_anisotropy, QStringLiteral("max_anisotropy"), 0);
     ReadSettingGlobal(Settings::values.use_frame_limit, QStringLiteral("use_frame_limit"), true);
     ReadSettingGlobal(Settings::values.frame_limit, QStringLiteral("frame_limit"), 100);
     ReadSettingGlobal(Settings::values.use_disk_shader_cache,
                       QStringLiteral("use_disk_shader_cache"), true);
-    ReadSettingGlobal(Settings::values.gpu_accuracy, QStringLiteral("gpu_accuracy"), 0);
+    ReadSettingGlobal(Settings::values.gpu_accuracy, QStringLiteral("gpu_accuracy"), 1);
     ReadSettingGlobal(Settings::values.use_asynchronous_gpu_emulation,
                       QStringLiteral("use_asynchronous_gpu_emulation"), true);
     ReadSettingGlobal(Settings::values.use_nvdec_emulation, QStringLiteral("use_nvdec_emulation"),
                       true);
     ReadSettingGlobal(Settings::values.use_vsync, QStringLiteral("use_vsync"), true);
     ReadSettingGlobal(Settings::values.use_assembly_shaders, QStringLiteral("use_assembly_shaders"),
-                      true);
+                      false);
     ReadSettingGlobal(Settings::values.use_asynchronous_shaders,
                       QStringLiteral("use_asynchronous_shaders"), false);
     ReadSettingGlobal(Settings::values.use_fast_gpu_time, QStringLiteral("use_fast_gpu_time"),
@@ -805,11 +821,11 @@ void Config::ReadScreenshotValues() {
 
     UISettings::values.enable_screenshot_save_as =
         ReadSetting(QStringLiteral("enable_screenshot_save_as"), true).toBool();
-    FS::GetUserPath(
-        FS::UserPath::ScreenshotsDir,
+    FS::SetYuzuPath(
+        FS::YuzuPath::ScreenshotsDir,
         qt_config
             ->value(QStringLiteral("screenshot_path"),
-                    QString::fromStdString(FS::GetUserPath(FS::UserPath::ScreenshotsDir)))
+                    QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::ScreenshotsDir)))
             .toString()
             .toStdString());
 
@@ -857,24 +873,20 @@ void Config::ReadSystemValues() {
     Settings::values.rng_seed.SetGlobal(rng_seed_global);
     if (global || !rng_seed_global) {
         if (rng_seed_enabled) {
-            Settings::values.rng_seed.SetValue(
-                ReadSetting(QStringLiteral("rng_seed"), 0).toULongLong());
+            Settings::values.rng_seed.SetValue(ReadSetting(QStringLiteral("rng_seed"), 0).toUInt());
         } else {
             Settings::values.rng_seed.SetValue(std::nullopt);
         }
     }
 
-    bool custom_rtc_enabled;
-    ReadSettingGlobal(custom_rtc_enabled, QStringLiteral("custom_rtc_enabled"), false);
-    bool custom_rtc_global =
-        global || qt_config->value(QStringLiteral("custom_rtc/use_global"), true).toBool();
-    Settings::values.custom_rtc.SetGlobal(custom_rtc_global);
-    if (global || !custom_rtc_global) {
+    if (global) {
+        const auto custom_rtc_enabled =
+            ReadSetting(QStringLiteral("custom_rtc_enabled"), false).toBool();
         if (custom_rtc_enabled) {
-            Settings::values.custom_rtc.SetValue(
-                std::chrono::seconds(ReadSetting(QStringLiteral("custom_rtc"), 0).toULongLong()));
+            Settings::values.custom_rtc =
+                std::chrono::seconds(ReadSetting(QStringLiteral("custom_rtc"), 0).toULongLong());
         } else {
-            Settings::values.custom_rtc.SetValue(std::nullopt);
+            Settings::values.custom_rtc = std::nullopt;
         }
     }
 
@@ -931,6 +943,13 @@ void Config::ReadUIGamelistValues() {
     UISettings::values.row_2_text_id = ReadSetting(QStringLiteral("row_2_text_id"), 2).toUInt();
     UISettings::values.cache_game_list =
         ReadSetting(QStringLiteral("cache_game_list"), true).toBool();
+    const int favorites_size = qt_config->beginReadArray(QStringLiteral("favorites"));
+    for (int i = 0; i < favorites_size; i++) {
+        qt_config->setArrayIndex(i);
+        UISettings::values.favorited_ids.append(
+            ReadSetting(QStringLiteral("program_id")).toULongLong());
+    }
+    qt_config->endArray();
 
     qt_config->endGroup();
 }
@@ -1003,7 +1022,8 @@ void Config::SavePlayerValue(std::size_t player_index) {
                  static_cast<u8>(Settings::ControllerType::ProController));
 
     if (!player_prefix.isEmpty()) {
-        WriteSetting(QStringLiteral("%1connected").arg(player_prefix), player.connected, false);
+        WriteSetting(QStringLiteral("%1connected").arg(player_prefix), player.connected,
+                     player_index == 0);
         WriteSetting(QStringLiteral("%1vibration_enabled").arg(player_prefix),
                      player.vibration_enabled, true);
         WriteSetting(QStringLiteral("%1vibration_strength").arg(player_prefix),
@@ -1085,10 +1105,7 @@ void Config::SaveTouchscreenValues() {
     const auto& touchscreen = Settings::values.touchscreen;
 
     WriteSetting(QStringLiteral("touchscreen_enabled"), touchscreen.enabled, true);
-    WriteSetting(QStringLiteral("touchscreen_device"), QString::fromStdString(touchscreen.device),
-                 QStringLiteral("engine:emu_window"));
 
-    WriteSetting(QStringLiteral("touchscreen_finger"), touchscreen.finger, 0);
     WriteSetting(QStringLiteral("touchscreen_angle"), touchscreen.rotation_angle, 0);
     WriteSetting(QStringLiteral("touchscreen_diameter_x"), touchscreen.diameter_x, 15);
     WriteSetting(QStringLiteral("touchscreen_diameter_y"), touchscreen.diameter_y, 15);
@@ -1174,7 +1191,7 @@ void Config::SaveControlValues() {
     SaveTouchscreenValues();
     SaveMotionTouchValues();
 
-    WriteSettingGlobal(QStringLiteral("use_docked_mode"), Settings::values.use_docked_mode, false);
+    WriteSettingGlobal(QStringLiteral("use_docked_mode"), Settings::values.use_docked_mode, true);
     WriteSettingGlobal(QStringLiteral("vibration_enabled"), Settings::values.vibration_enabled,
                        true);
     WriteSettingGlobal(QStringLiteral("enable_accurate_vibrations"),
@@ -1189,7 +1206,8 @@ void Config::SaveControlValues() {
     WriteSetting(QStringLiteral("keyboard_enabled"), Settings::values.keyboard_enabled, false);
     WriteSetting(QStringLiteral("emulate_analog_keyboard"),
                  Settings::values.emulate_analog_keyboard, false);
-
+    WriteSetting(QStringLiteral("mouse_panning_sensitivity"),
+                 Settings::values.mouse_panning_sensitivity, 1.0f);
     qt_config->endGroup();
 }
 
@@ -1206,20 +1224,17 @@ void Config::SaveDataStorageValues() {
 
     WriteSetting(QStringLiteral("use_virtual_sd"), Settings::values.use_virtual_sd, true);
     WriteSetting(QStringLiteral("nand_directory"),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::NANDDir)),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::NANDDir)));
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::NANDDir)),
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::NANDDir)));
     WriteSetting(QStringLiteral("sdmc_directory"),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::SDMCDir)),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::SDMCDir)));
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::SDMCDir)),
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::SDMCDir)));
     WriteSetting(QStringLiteral("load_directory"),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::LoadDir)),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::LoadDir)));
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::LoadDir)),
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::LoadDir)));
     WriteSetting(QStringLiteral("dump_directory"),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::DumpDir)),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::DumpDir)));
-    WriteSetting(QStringLiteral("cache_directory"),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::CacheDir)),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::CacheDir)));
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::DumpDir)),
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::DumpDir)));
     WriteSetting(QStringLiteral("gamecard_inserted"), Settings::values.gamecard_inserted, false);
     WriteSetting(QStringLiteral("gamecard_current_game"), Settings::values.gamecard_current_game,
                  false);
@@ -1239,6 +1254,7 @@ void Config::SaveDebuggingValues() {
     WriteSetting(QStringLiteral("dump_exefs"), Settings::values.dump_exefs, false);
     WriteSetting(QStringLiteral("dump_nso"), Settings::values.dump_nso, false);
     WriteSetting(QStringLiteral("quest_flag"), Settings::values.quest_flag, false);
+    WriteSetting(QStringLiteral("use_debug_asserts"), Settings::values.use_debug_asserts, false);
     WriteSetting(QStringLiteral("disable_macro_jit"), Settings::values.disable_macro_jit, false);
 
     qt_config->endGroup();
@@ -1247,7 +1263,7 @@ void Config::SaveDebuggingValues() {
 void Config::SaveServiceValues() {
     qt_config->beginGroup(QStringLiteral("Services"));
     WriteSetting(QStringLiteral("bcat_backend"),
-                 QString::fromStdString(Settings::values.bcat_backend), QStringLiteral("null"));
+                 QString::fromStdString(Settings::values.bcat_backend), QStringLiteral("none"));
     WriteSetting(QStringLiteral("bcat_boxcat_local"), Settings::values.bcat_boxcat_local, false);
     qt_config->endGroup();
 }
@@ -1304,10 +1320,19 @@ void Config::SavePathValues() {
 void Config::SaveCpuValues() {
     qt_config->beginGroup(QStringLiteral("Cpu"));
 
-    if (global) {
-        WriteSetting(QStringLiteral("cpu_accuracy"),
-                     static_cast<int>(Settings::values.cpu_accuracy), 0);
+    WriteSettingGlobal(QStringLiteral("cpu_accuracy"),
+                       static_cast<u32>(Settings::values.cpu_accuracy.GetValue(global)),
+                       Settings::values.cpu_accuracy.UsingGlobal(),
+                       static_cast<u32>(Settings::CPUAccuracy::Accurate));
 
+    WriteSettingGlobal(QStringLiteral("cpuopt_unsafe_unfuse_fma"),
+                       Settings::values.cpuopt_unsafe_unfuse_fma, true);
+    WriteSettingGlobal(QStringLiteral("cpuopt_unsafe_reduce_fp_error"),
+                       Settings::values.cpuopt_unsafe_reduce_fp_error, true);
+    WriteSettingGlobal(QStringLiteral("cpuopt_unsafe_inaccurate_nan"),
+                       Settings::values.cpuopt_unsafe_inaccurate_nan, true);
+
+    if (global) {
         WriteSetting(QStringLiteral("cpuopt_page_tables"), Settings::values.cpuopt_page_tables,
                      true);
         WriteSetting(QStringLiteral("cpuopt_block_linking"), Settings::values.cpuopt_block_linking,
@@ -1322,11 +1347,6 @@ void Config::SaveCpuValues() {
         WriteSetting(QStringLiteral("cpuopt_misc_ir"), Settings::values.cpuopt_misc_ir, true);
         WriteSetting(QStringLiteral("cpuopt_reduce_misalign_checks"),
                      Settings::values.cpuopt_reduce_misalign_checks, true);
-
-        WriteSetting(QStringLiteral("cpuopt_unsafe_unfuse_fma"),
-                     Settings::values.cpuopt_unsafe_unfuse_fma, true);
-        WriteSetting(QStringLiteral("cpuopt_unsafe_reduce_fp_error"),
-                     Settings::values.cpuopt_unsafe_reduce_fp_error, true);
     }
 
     qt_config->endGroup();
@@ -1340,6 +1360,13 @@ void Config::SaveRendererValues() {
                        Settings::values.renderer_backend.UsingGlobal(), 0);
     WriteSetting(QStringLiteral("debug"), Settings::values.renderer_debug, false);
     WriteSettingGlobal(QStringLiteral("vulkan_device"), Settings::values.vulkan_device, 0);
+#ifdef _WIN32
+    WriteSettingGlobal(QStringLiteral("fullscreen_mode"), Settings::values.fullscreen_mode, 0);
+#else
+    // *nix platforms may have issues with the borderless windowed fullscreen mode.
+    // Default to exclusive fullscreen on these platforms for now.
+    WriteSettingGlobal(QStringLiteral("fullscreen_mode"), Settings::values.fullscreen_mode, 1);
+#endif
     WriteSettingGlobal(QStringLiteral("aspect_ratio"), Settings::values.aspect_ratio, 0);
     WriteSettingGlobal(QStringLiteral("max_anisotropy"), Settings::values.max_anisotropy, 0);
     WriteSettingGlobal(QStringLiteral("use_frame_limit"), Settings::values.use_frame_limit, true);
@@ -1348,14 +1375,14 @@ void Config::SaveRendererValues() {
                        Settings::values.use_disk_shader_cache, true);
     WriteSettingGlobal(QStringLiteral("gpu_accuracy"),
                        static_cast<int>(Settings::values.gpu_accuracy.GetValue(global)),
-                       Settings::values.gpu_accuracy.UsingGlobal(), 0);
+                       Settings::values.gpu_accuracy.UsingGlobal(), 1);
     WriteSettingGlobal(QStringLiteral("use_asynchronous_gpu_emulation"),
                        Settings::values.use_asynchronous_gpu_emulation, true);
     WriteSettingGlobal(QStringLiteral("use_nvdec_emulation"), Settings::values.use_nvdec_emulation,
                        true);
     WriteSettingGlobal(QStringLiteral("use_vsync"), Settings::values.use_vsync, true);
     WriteSettingGlobal(QStringLiteral("use_assembly_shaders"),
-                       Settings::values.use_assembly_shaders, true);
+                       Settings::values.use_assembly_shaders, false);
     WriteSettingGlobal(QStringLiteral("use_asynchronous_shaders"),
                        Settings::values.use_asynchronous_shaders, false);
     WriteSettingGlobal(QStringLiteral("use_fast_gpu_time"), Settings::values.use_fast_gpu_time,
@@ -1374,7 +1401,7 @@ void Config::SaveScreenshotValues() {
     WriteSetting(QStringLiteral("enable_screenshot_save_as"),
                  UISettings::values.enable_screenshot_save_as);
     WriteSetting(QStringLiteral("screenshot_path"),
-                 QString::fromStdString(FS::GetUserPath(FS::UserPath::ScreenshotsDir)));
+                 QString::fromStdString(FS::GetYuzuPathString(FS::YuzuPath::ScreenshotsDir)));
 
     qt_config->endGroup();
 }
@@ -1414,14 +1441,14 @@ void Config::SaveSystemValues() {
                        Settings::values.rng_seed.GetValue(global).value_or(0),
                        Settings::values.rng_seed.UsingGlobal(), 0);
 
-    WriteSettingGlobal(QStringLiteral("custom_rtc_enabled"),
-                       Settings::values.custom_rtc.GetValue(global).has_value(),
-                       Settings::values.custom_rtc.UsingGlobal(), false);
-    WriteSettingGlobal(
-        QStringLiteral("custom_rtc"),
-        QVariant::fromValue<long long>(
-            Settings::values.custom_rtc.GetValue(global).value_or(std::chrono::seconds{}).count()),
-        Settings::values.custom_rtc.UsingGlobal(), 0);
+    if (global) {
+        WriteSetting(QStringLiteral("custom_rtc_enabled"), Settings::values.custom_rtc.has_value(),
+                     false);
+        WriteSetting(QStringLiteral("custom_rtc"),
+                     QVariant::fromValue<long long>(
+                         Settings::values.custom_rtc.value_or(std::chrono::seconds{}).count()),
+                     0);
+    }
 
     WriteSettingGlobal(QStringLiteral("sound_index"), Settings::values.sound_index, 1);
 
@@ -1468,6 +1495,13 @@ void Config::SaveUIGamelistValues() {
     WriteSetting(QStringLiteral("row_1_text_id"), UISettings::values.row_1_text_id, 3);
     WriteSetting(QStringLiteral("row_2_text_id"), UISettings::values.row_2_text_id, 2);
     WriteSetting(QStringLiteral("cache_game_list"), UISettings::values.cache_game_list, true);
+    qt_config->beginWriteArray(QStringLiteral("favorites"));
+    for (int i = 0; i < UISettings::values.favorited_ids.size(); i++) {
+        qt_config->setArrayIndex(i);
+        WriteSetting(QStringLiteral("program_id"),
+                     QVariant::fromValue(UISettings::values.favorited_ids[i]));
+    }
+    qt_config->endArray();
 
     qt_config->endGroup();
 }
@@ -1591,7 +1625,7 @@ void Config::Reload() {
     ReadValues();
     // To apply default value changes
     SaveValues();
-    Settings::Apply(Core::System::GetInstance());
+    Core::System::GetInstance().ApplySettings();
 }
 
 void Config::Save() {

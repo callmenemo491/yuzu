@@ -97,8 +97,8 @@ add_custom_command(OUTPUT scm_rev.cpp
 add_library(common STATIC
     algorithm.h
     alignment.h
+    assert.cpp
     assert.h
-    atomic_ops.cpp
     atomic_ops.h
     detached_tasks.cpp
     detached_tasks.h
@@ -108,9 +108,8 @@ add_library(common STATIC
     bit_util.h
     cityhash.cpp
     cityhash.h
-    color.h
     common_funcs.h
-    common_paths.h
+    common_sizes.h
     common_types.h
     concepts.h
     div_ceil.h
@@ -118,11 +117,20 @@ add_library(common STATIC
     dynamic_library.h
     fiber.cpp
     fiber.h
-    file_util.cpp
-    file_util.h
+    fs/file.cpp
+    fs/file.h
+    fs/fs.cpp
+    fs/fs.h
+    fs/fs_paths.h
+    fs/fs_types.h
+    fs/fs_util.cpp
+    fs/fs_util.h
+    fs/path_util.cpp
+    fs/path_util.h
     hash.h
     hex_util.cpp
     hex_util.h
+    intrusive_red_black_tree.h
     logging/backend.cpp
     logging/backend.h
     logging/filter.cpp
@@ -135,21 +143,27 @@ add_library(common STATIC
     math_util.h
     memory_detect.cpp
     memory_detect.h
-    memory_hook.cpp
-    memory_hook.h
     microprofile.cpp
     microprofile.h
     microprofileui.h
     misc.cpp
+    nvidia_flags.cpp
+    nvidia_flags.h
     page_table.cpp
     page_table.h
     param_package.cpp
     param_package.h
+    parent_of_member.h
+    point.h
     quaternion.h
     ring_buffer.h
     scm_rev.cpp
     scm_rev.h
     scope_exit.h
+    settings.cpp
+    settings.h
+    settings_input.cpp
+    settings_input.h
     spin_lock.cpp
     spin_lock.h
     stream.cpp
@@ -167,9 +181,8 @@ add_library(common STATIC
     threadsafe_queue.h
     time_zone.cpp
     time_zone.h
-    timer.cpp
-    timer.h
-    uint128.cpp
+    tiny_mt.h
+    tree.h
     uint128.h
     uuid.cpp
     uuid.h
@@ -207,6 +220,8 @@ if (MSVC)
 else()
   target_compile_options(common PRIVATE
     -Werror
+
+    $<$<CXX_COMPILER_ID:Clang>:-fsized-deallocation>
   )
 endif()
 

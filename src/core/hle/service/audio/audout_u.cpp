@@ -14,9 +14,10 @@
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/hle_ipc.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_writable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/audio/audout_u.h"
 #include "core/hle/service/audio/errors.h"
 #include "core/memory.h"
@@ -29,7 +30,7 @@ constexpr int DefaultSampleRate{48000};
 struct AudoutParams {
     s32_le sample_rate;
     u16_le channel_count;
-    INSERT_PADDING_BYTES(2);
+    INSERT_PADDING_BYTES_NOINIT(2);
 };
 static_assert(sizeof(AudoutParams) == 0x8, "AudoutParams is an invalid size");
 
@@ -42,23 +43,23 @@ class IAudioOut final : public ServiceFramework<IAudioOut> {
 public:
     IAudioOut(Core::System& system_, AudoutParams audio_params_, AudioCore::AudioOut& audio_core_,
               std::string&& device_name_, std::string&& unique_name)
-        : ServiceFramework{system_, "IAudioOut"}, audio_core{audio_core_},
-          device_name{std::move(device_name_)}, audio_params{audio_params_}, main_memory{
-                                                                                 system.Memory()} {
+        : ServiceFramework{system_, "IAudioOut"}, audio_core{audio_core_}, device_name{std::move(
+                                                                               device_name_)},
+          audio_params{audio_params_}, buffer_event{system.Kernel()}, main_memory{system.Memory()} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IAudioOut::GetAudioOutState, "GetAudioOutState"},
-            {1, &IAudioOut::StartAudioOut, "StartAudioOut"},
-            {2, &IAudioOut::StopAudioOut, "StopAudioOut"},
+            {1, &IAudioOut::StartAudioOut, "Start"},
+            {2, &IAudioOut::StopAudioOut, "Stop"},
             {3, &IAudioOut::AppendAudioOutBufferImpl, "AppendAudioOutBuffer"},
             {4, &IAudioOut::RegisterBufferEvent, "RegisterBufferEvent"},
-            {5, &IAudioOut::GetReleasedAudioOutBufferImpl, "GetReleasedAudioOutBuffer"},
+            {5, &IAudioOut::GetReleasedAudioOutBufferImpl, "GetReleasedAudioOutBuffers"},
             {6, &IAudioOut::ContainsAudioOutBuffer, "ContainsAudioOutBuffer"},
             {7, &IAudioOut::AppendAudioOutBufferImpl, "AppendAudioOutBufferAuto"},
             {8, &IAudioOut::GetReleasedAudioOutBufferImpl, "GetReleasedAudioOutBufferAuto"},
             {9, &IAudioOut::GetAudioOutBufferCount, "GetAudioOutBufferCount"},
             {10, nullptr, "GetAudioOutPlayedSampleCount"},
-            {11, nullptr, "FlushAudioOutBuffers"},
+            {11, &IAudioOut::FlushAudioOutBuffers, "FlushAudioOutBuffers"},
             {12, &IAudioOut::SetAudioOutVolume, "SetAudioOutVolume"},
             {13, &IAudioOut::GetAudioOutVolume, "GetAudioOutVolume"},
         };
@@ -66,13 +67,13 @@ public:
         RegisterHandlers(functions);
 
         // This is the event handle used to check if the audio buffer was released
-        buffer_event =
-            Kernel::WritableEvent::CreateEventPair(system.Kernel(), "IAudioOutBufferReleased");
+        Kernel::KAutoObject::Create(std::addressof(buffer_event));
+        buffer_event.Initialize("IAudioOutBufferReleased");
 
         stream = audio_core.OpenStream(system.CoreTiming(), audio_params.sample_rate,
                                        audio_params.channel_count, std::move(unique_name), [this] {
                                            const auto guard = LockService();
-                                           buffer_event.writable->Signal();
+                                           buffer_event.GetWritableEvent().Signal();
                                        });
     }
 
@@ -125,7 +126,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(buffer_event.readable);
+        rb.PushCopyObjects(buffer_event.GetReadableEvent());
     }
 
     void AppendAudioOutBufferImpl(Kernel::HLERequestContext& ctx) {
@@ -185,6 +186,14 @@ private:
         rb.Push(static_cast<u32>(stream->GetQueueSize()));
     }
 
+    void FlushAudioOutBuffers(Kernel::HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Audio, "called");
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(RESULT_SUCCESS);
+        rb.Push(stream->Flush());
+    }
+
     void SetAudioOutVolume(Kernel::HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
         const float volume = rp.Pop<float>();
@@ -211,7 +220,7 @@ private:
     [[maybe_unused]] AudoutParams audio_params{};
 
     /// This is the event handle used to check if the audio buffer was released
-    Kernel::EventPair buffer_event;
+    Kernel::KEvent buffer_event;
     Core::Memory::Memory& main_memory;
 };
 

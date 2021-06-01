@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/hle/kernel/k_event.h"
 #include "core/hle/service/service.h"
 
 namespace Core {
@@ -25,12 +26,13 @@ private:
     void OpenAudioRenderer(Kernel::HLERequestContext& ctx);
     void GetAudioRendererWorkBufferSize(Kernel::HLERequestContext& ctx);
     void GetAudioDeviceService(Kernel::HLERequestContext& ctx);
-    void OpenAudioRendererAuto(Kernel::HLERequestContext& ctx);
+    void OpenAudioRendererForManualExecution(Kernel::HLERequestContext& ctx);
     void GetAudioDeviceServiceWithRevisionInfo(Kernel::HLERequestContext& ctx);
 
     void OpenAudioRendererImpl(Kernel::HLERequestContext& ctx);
 
     std::size_t audren_instance_count = 0;
+    Kernel::KEvent buffer_event;
 };
 
 // Describes a particular audio feature that may be supported in a particular revision.

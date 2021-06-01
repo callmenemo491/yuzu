@@ -18,9 +18,7 @@
 #define NUM(field_name) (sizeof(Maxwell3D::Regs::field_name) / (sizeof(u32)))
 
 namespace Vulkan {
-
 namespace {
-
 using namespace Dirty;
 using namespace VideoCommon::Dirty;
 using Tegra::Engines::Maxwell3D;
@@ -30,14 +28,17 @@ using Table = Maxwell3D::DirtyState::Table;
 using Flags = Maxwell3D::DirtyState::Flags;
 
 Flags MakeInvalidationFlags() {
-    static constexpr std::array INVALIDATION_FLAGS{
+    static constexpr int INVALIDATION_FLAGS[]{
         Viewports,         Scissors,  DepthBias,         BlendConstants,    DepthBounds,
         StencilProperties, CullMode,  DepthBoundsEnable, DepthTestEnable,   DepthWriteEnable,
-        DepthCompareOp,    FrontFace, StencilOp,         StencilTestEnable,
+        DepthCompareOp,    FrontFace, StencilOp,         StencilTestEnable, VertexBuffers,
     };
     Flags flags{};
     for (const int flag : INVALIDATION_FLAGS) {
         flags[flag] = true;
+    }
+    for (int index = VertexBuffer0; index <= VertexBuffer31; ++index) {
+        flags[index] = true;
     }
     return flags;
 }
@@ -125,12 +126,40 @@ void SetupDirtyStencilTestEnable(Tables& tables) {
     tables[0][OFF(stencil_enable)] = StencilTestEnable;
 }
 
+void SetupDirtyBlending(Tables& tables) {
+    tables[0][OFF(color_mask_common)] = Blending;
+    tables[0][OFF(independent_blend_enable)] = Blending;
+    FillBlock(tables[0], OFF(color_mask), NUM(color_mask), Blending);
+    FillBlock(tables[0], OFF(blend), NUM(blend), Blending);
+    FillBlock(tables[0], OFF(independent_blend), NUM(independent_blend), Blending);
+}
+
+void SetupDirtyInstanceDivisors(Tables& tables) {
+    static constexpr size_t divisor_offset = 3;
+    for (size_t index = 0; index < Regs::NumVertexArrays; ++index) {
+        tables[0][OFF(instanced_arrays) + index] = InstanceDivisors;
+        tables[0][OFF(vertex_array) + index * NUM(vertex_array[0]) + divisor_offset] =
+            InstanceDivisors;
+    }
+}
+
+void SetupDirtyVertexAttributes(Tables& tables) {
+    FillBlock(tables[0], OFF(vertex_attrib_format), NUM(vertex_attrib_format), VertexAttributes);
+}
+
+void SetupDirtyViewportSwizzles(Tables& tables) {
+    static constexpr size_t swizzle_offset = 6;
+    for (size_t index = 0; index < Regs::NumViewports; ++index) {
+        tables[0][OFF(viewport_transform) + index * NUM(viewport_transform[0]) + swizzle_offset] =
+            ViewportSwizzles;
+    }
+}
 } // Anonymous namespace
 
 StateTracker::StateTracker(Tegra::GPU& gpu)
     : flags{gpu.Maxwell3D().dirty.flags}, invalidation_flags{MakeInvalidationFlags()} {
     auto& tables = gpu.Maxwell3D().dirty.tables;
-    SetupDirtyRenderTargets(tables);
+    SetupDirtyFlags(tables);
     SetupDirtyViewports(tables);
     SetupDirtyScissors(tables);
     SetupDirtyDepthBias(tables);
@@ -145,6 +174,10 @@ StateTracker::StateTracker(Tegra::GPU& gpu)
     SetupDirtyFrontFace(tables);
     SetupDirtyStencilOp(tables);
     SetupDirtyStencilTestEnable(tables);
+    SetupDirtyBlending(tables);
+    SetupDirtyInstanceDivisors(tables);
+    SetupDirtyVertexAttributes(tables);
+    SetupDirtyViewportSwizzles(tables);
 }
 
 } // namespace Vulkan

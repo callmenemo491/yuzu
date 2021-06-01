@@ -6,9 +6,9 @@
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/hle_ipc.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/readable_event.h"
-#include "core/hle/kernel/writable_event.h"
 #include "core/hle/service/btdrv/btdrv.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
@@ -17,7 +17,8 @@ namespace Service::BtDrv {
 
 class Bt final : public ServiceFramework<Bt> {
 public:
-    explicit Bt(Core::System& system_) : ServiceFramework{system_, "bt"} {
+    explicit Bt(Core::System& system_)
+        : ServiceFramework{system_, "bt"}, register_event{system.Kernel()} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, nullptr, "LeClientReadCharacteristic"},
@@ -34,8 +35,8 @@ public:
         // clang-format on
         RegisterHandlers(functions);
 
-        auto& kernel = system.Kernel();
-        register_event = Kernel::WritableEvent::CreateEventPair(kernel, "BT:RegisterEvent");
+        Kernel::KAutoObject::Create(std::addressof(register_event));
+        register_event.Initialize("BT:RegisterEvent");
     }
 
 private:
@@ -44,10 +45,10 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 1};
         rb.Push(RESULT_SUCCESS);
-        rb.PushCopyObjects(register_event.readable);
+        rb.PushCopyObjects(register_event.GetReadableEvent());
     }
 
-    Kernel::EventPair register_event;
+    Kernel::KEvent register_event;
 };
 
 class BtDrv final : public ServiceFramework<BtDrv> {
@@ -155,6 +156,25 @@ public:
             {97, nullptr, "RegisterBleHidEvent"},
             {98, nullptr, "SetBleScanParameter"},
             {99, nullptr, "MoveToSecondaryPiconet"},
+            {100, nullptr, "IsBluetoothEnabled"},
+            {128, nullptr, "AcquireAudioEvent"},
+            {129, nullptr, "GetAudioEventInfo"},
+            {130, nullptr, "OpenAudioConnection"},
+            {131, nullptr, "CloseAudioConnection"},
+            {132, nullptr, "OpenAudioOut"},
+            {133, nullptr, "CloseAudioOut"},
+            {134, nullptr, "AcquireAudioOutStateChangedEvent"},
+            {135, nullptr, "StartAudioOut"},
+            {136, nullptr, "StopAudioOut"},
+            {137, nullptr, "GetAudioOutState"},
+            {138, nullptr, "GetAudioOutFeedingCodec"},
+            {139, nullptr, "GetAudioOutFeedingParameter"},
+            {140, nullptr, "AcquireAudioOutBufferAvailableEvent"},
+            {141, nullptr, "SendAudioData"},
+            {142, nullptr, "AcquireAudioControlInputStateChangedEvent"},
+            {143, nullptr, "GetAudioControlInputState"},
+            {144, nullptr, "AcquireAudioConnectionStateChangedEvent"},
+            {145, nullptr, "GetConnectedAudioDevice"},
             {256, nullptr, "IsManufacturingMode"},
             {257, nullptr, "EmulateBluetoothCrash"},
             {258, nullptr, "GetBleChannelMap"},

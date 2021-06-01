@@ -7,11 +7,10 @@
 #include <string>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
-#include "common/file_util.h"
 #include "common/logging/log.h"
 #include "core/hle/kernel/code_set.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/loader/elf.h"
 #include "core/memory.h"
 
@@ -364,26 +363,29 @@ SectionID ElfReader::GetSectionByName(const char* name, int firstSection) const 
 
 namespace Loader {
 
-AppLoader_ELF::AppLoader_ELF(FileSys::VirtualFile file) : AppLoader(std::move(file)) {}
+AppLoader_ELF::AppLoader_ELF(FileSys::VirtualFile file_) : AppLoader(std::move(file_)) {}
 
-FileType AppLoader_ELF::IdentifyType(const FileSys::VirtualFile& file) {
+FileType AppLoader_ELF::IdentifyType(const FileSys::VirtualFile& elf_file) {
     static constexpr u16 ELF_MACHINE_ARM{0x28};
 
     u32 magic = 0;
-    if (4 != file->ReadObject(&magic))
+    if (4 != elf_file->ReadObject(&magic)) {
         return FileType::Error;
+    }
 
     u16 machine = 0;
-    if (2 != file->ReadObject(&machine, 18))
+    if (2 != elf_file->ReadObject(&machine, 18)) {
         return FileType::Error;
+    }
 
-    if (Common::MakeMagic('\x7f', 'E', 'L', 'F') == magic && ELF_MACHINE_ARM == machine)
+    if (Common::MakeMagic('\x7f', 'E', 'L', 'F') == magic && ELF_MACHINE_ARM == machine) {
         return FileType::ELF;
+    }
 
     return FileType::Error;
 }
 
-AppLoader_ELF::LoadResult AppLoader_ELF::Load(Kernel::Process& process,
+AppLoader_ELF::LoadResult AppLoader_ELF::Load(Kernel::KProcess& process,
                                               [[maybe_unused]] Core::System& system) {
     if (is_loaded) {
         return {ResultStatus::ErrorAlreadyLoaded, {}};

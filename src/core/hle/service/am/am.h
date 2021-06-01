@@ -7,12 +7,13 @@
 #include <chrono>
 #include <memory>
 #include <queue>
-#include "core/hle/kernel/writable_event.h"
+
+#include "core/hle/kernel/k_event.h"
 #include "core/hle/service/service.h"
 
 namespace Kernel {
 class KernelCore;
-class TransferMemory;
+class KTransferMemory;
 } // namespace Kernel
 
 namespace Service::NVFlinger {
@@ -55,18 +56,19 @@ public:
     explicit AppletMessageQueue(Kernel::KernelCore& kernel);
     ~AppletMessageQueue();
 
-    const std::shared_ptr<Kernel::ReadableEvent>& GetMesssageRecieveEvent() const;
-    const std::shared_ptr<Kernel::ReadableEvent>& GetOperationModeChangedEvent() const;
+    Kernel::KReadableEvent& GetMessageReceiveEvent();
+    Kernel::KReadableEvent& GetOperationModeChangedEvent();
     void PushMessage(AppletMessage msg);
     AppletMessage PopMessage();
     std::size_t GetMessageCount() const;
-    void OperationModeChanged();
     void RequestExit();
+    void FocusStateChanged();
+    void OperationModeChanged();
 
 private:
     std::queue<AppletMessage> messages;
-    Kernel::EventPair on_new_message;
-    Kernel::EventPair on_operation_mode_changed;
+    Kernel::KEvent on_new_message;
+    Kernel::KEvent on_operation_mode_changed;
 };
 
 class IWindowController final : public ServiceFramework<IWindowController> {
@@ -145,6 +147,7 @@ private:
     void IsAutoSleepDisabled(Kernel::HLERequestContext& ctx);
     void GetAccumulatedSuspendedTickValue(Kernel::HLERequestContext& ctx);
     void GetAccumulatedSuspendedTickChangedEvent(Kernel::HLERequestContext& ctx);
+    void SetAlbumImageTakenNotificationEnabled(Kernel::HLERequestContext& ctx);
 
     enum class ScreenshotPermission : u32 {
         Inherit = 0,
@@ -153,8 +156,8 @@ private:
     };
 
     NVFlinger::NVFlinger& nvflinger;
-    Kernel::EventPair launchable_event;
-    Kernel::EventPair accumulated_suspended_tick_changed_event;
+    Kernel::KEvent launchable_event;
+    Kernel::KEvent accumulated_suspended_tick_changed_event;
 
     u32 idle_time_detection_extension = 0;
     u64 num_fatal_sections_entered = 0;
@@ -189,9 +192,11 @@ private:
     void IsVrModeEnabled(Kernel::HLERequestContext& ctx);
     void SetVrModeEnabled(Kernel::HLERequestContext& ctx);
     void SetLcdBacklighOffEnabled(Kernel::HLERequestContext& ctx);
+    void BeginVrModeEx(Kernel::HLERequestContext& ctx);
     void EndVrModeEx(Kernel::HLERequestContext& ctx);
     void GetDefaultDisplayResolution(Kernel::HLERequestContext& ctx);
     void SetCpuBoostMode(Kernel::HLERequestContext& ctx);
+    void SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled(Kernel::HLERequestContext& ctx);
 
     std::shared_ptr<AppletMessageQueue> msg_queue;
     bool vr_mode_state{};
@@ -251,6 +256,7 @@ private:
     void CreateLibraryApplet(Kernel::HLERequestContext& ctx);
     void CreateStorage(Kernel::HLERequestContext& ctx);
     void CreateTransferMemoryStorage(Kernel::HLERequestContext& ctx);
+    void CreateHandleStorage(Kernel::HLERequestContext& ctx);
 };
 
 class IApplicationFunctions final : public ServiceFramework<IApplicationFunctions> {
@@ -265,6 +271,7 @@ private:
     void SetTerminateResult(Kernel::HLERequestContext& ctx);
     void GetDisplayVersion(Kernel::HLERequestContext& ctx);
     void GetDesiredLanguage(Kernel::HLERequestContext& ctx);
+    void IsGamePlayRecordingSupported(Kernel::HLERequestContext& ctx);
     void InitializeGamePlayRecording(Kernel::HLERequestContext& ctx);
     void SetGamePlayRecordingState(Kernel::HLERequestContext& ctx);
     void NotifyRunning(Kernel::HLERequestContext& ctx);
@@ -287,12 +294,15 @@ private:
     void GetPreviousProgramIndex(Kernel::HLERequestContext& ctx);
     void GetGpuErrorDetectedSystemEvent(Kernel::HLERequestContext& ctx);
     void GetFriendInvitationStorageChannelEvent(Kernel::HLERequestContext& ctx);
+    void TryPopFromFriendInvitationStorageChannel(Kernel::HLERequestContext& ctx);
+    void GetHealthWarningDisappearedSystemEvent(Kernel::HLERequestContext& ctx);
 
     bool launch_popped_application_specific = false;
     bool launch_popped_account_preselect = false;
     s32 previous_program_index{-1};
-    Kernel::EventPair gpu_error_detected_event;
-    Kernel::EventPair friend_invitation_storage_channel_event;
+    Kernel::KEvent gpu_error_detected_event;
+    Kernel::KEvent friend_invitation_storage_channel_event;
+    Kernel::KEvent health_warning_disappeared_system_event;
 };
 
 class IHomeMenuFunctions final : public ServiceFramework<IHomeMenuFunctions> {
@@ -304,7 +314,7 @@ private:
     void RequestToGetForeground(Kernel::HLERequestContext& ctx);
     void GetPopFromGeneralChannelEvent(Kernel::HLERequestContext& ctx);
 
-    Kernel::EventPair pop_from_general_channel_event;
+    Kernel::KEvent pop_from_general_channel_event;
 };
 
 class IGlobalStateController final : public ServiceFramework<IGlobalStateController> {

@@ -6,7 +6,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/xts_archive.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/loader/nax.h"
 #include "core/loader/nca.h"
 
@@ -26,14 +26,14 @@ FileType IdentifyTypeImpl(const FileSys::NAX& nax) {
 }
 } // Anonymous namespace
 
-AppLoader_NAX::AppLoader_NAX(FileSys::VirtualFile file)
-    : AppLoader(file), nax(std::make_unique<FileSys::NAX>(file)),
+AppLoader_NAX::AppLoader_NAX(FileSys::VirtualFile file_)
+    : AppLoader(file_), nax(std::make_unique<FileSys::NAX>(file_)),
       nca_loader(std::make_unique<AppLoader_NCA>(nax->GetDecrypted())) {}
 
 AppLoader_NAX::~AppLoader_NAX() = default;
 
-FileType AppLoader_NAX::IdentifyType(const FileSys::VirtualFile& file) {
-    const FileSys::NAX nax(file);
+FileType AppLoader_NAX::IdentifyType(const FileSys::VirtualFile& nax_file) {
+    const FileSys::NAX nax(nax_file);
     return IdentifyTypeImpl(nax);
 }
 
@@ -41,8 +41,7 @@ FileType AppLoader_NAX::GetFileType() const {
     return IdentifyTypeImpl(*nax);
 }
 
-AppLoader_NAX::LoadResult AppLoader_NAX::Load(Kernel::Process& process,
-                                              [[maybe_unused]] Core::System& system) {
+AppLoader_NAX::LoadResult AppLoader_NAX::Load(Kernel::KProcess& process, Core::System& system) {
     if (is_loaded) {
         return {ResultStatus::ErrorAlreadyLoaded, {}};
     }

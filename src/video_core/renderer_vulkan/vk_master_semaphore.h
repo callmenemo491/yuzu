@@ -8,20 +8,25 @@
 #include <thread>
 
 #include "common/common_types.h"
-#include "video_core/renderer_vulkan/wrapper.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
 
-class VKDevice;
+class Device;
 
 class MasterSemaphore {
 public:
-    explicit MasterSemaphore(const VKDevice& device);
+    explicit MasterSemaphore(const Device& device);
     ~MasterSemaphore();
 
     /// Returns the current logical tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
-        return current_tick;
+        return current_tick.load(std::memory_order_relaxed);
+    }
+
+    /// Returns the last known GPU tick.
+    [[nodiscard]] u64 KnownGpuTick() const noexcept {
+        return gpu_tick.load(std::memory_order_relaxed);
     }
 
     /// Returns the timeline semaphore handle.
@@ -30,8 +35,8 @@ public:
     }
 
     /// Returns true when a tick has been hit by the GPU.
-    [[nodiscard]] bool IsFree(u64 tick) {
-        return gpu_tick >= tick;
+    [[nodiscard]] bool IsFree(u64 tick) const noexcept {
+        return KnownGpuTick() >= tick;
     }
 
     /// Advance to the logical tick.
@@ -41,7 +46,7 @@ public:
 
     /// Refresh the known GPU tick
     void Refresh() {
-        gpu_tick = semaphore.GetCounter();
+        gpu_tick.store(semaphore.GetCounter(), std::memory_order_relaxed);
     }
 
     /// Waits for a tick to be hit on the GPU

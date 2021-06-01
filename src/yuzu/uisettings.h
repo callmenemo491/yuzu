@@ -74,6 +74,7 @@ struct Values {
     QString game_dir_deprecated;
     bool game_dir_deprecated_deepscan;
     QVector<UISettings::GameDir> game_dirs;
+    QVector<u64> favorited_ids;
     QStringList recent_files;
     QString language;
 
@@ -94,6 +95,8 @@ struct Values {
     uint8_t row_2_text_id;
     std::atomic_bool is_game_list_reload_pending{false};
     bool cache_game_list;
+
+    bool configuration_applied;
 };
 
 extern Values values;

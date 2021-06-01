@@ -10,8 +10,8 @@
 #include "core/core_timing.h"
 #include "core/core_timing_util.h"
 #include "core/hardware_properties.h"
-#include "core/hle/kernel/memory/page_table.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_page_table.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/hid/controllers/npad.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/sm/sm.h"
@@ -37,8 +37,8 @@ std::string_view ExtractName(std::string_view data, std::size_t start_index, cha
 }
 } // Anonymous namespace
 
-StandardVmCallbacks::StandardVmCallbacks(Core::System& system, const CheatProcessMetadata& metadata)
-    : metadata(metadata), system(system) {}
+StandardVmCallbacks::StandardVmCallbacks(System& system_, const CheatProcessMetadata& metadata_)
+    : metadata{metadata_}, system{system_} {}
 
 StandardVmCallbacks::~StandardVmCallbacks() = default;
 
@@ -174,11 +174,11 @@ std::vector<CheatEntry> TextCheatParser::Parse(std::string_view data) const {
     return out;
 }
 
-CheatEngine::CheatEngine(Core::System& system, std::vector<CheatEntry> cheats,
-                         const std::array<u8, 0x20>& build_id)
-    : vm{std::make_unique<StandardVmCallbacks>(system, metadata)},
-      cheats(std::move(cheats)), core_timing{system.CoreTiming()}, system{system} {
-    metadata.main_nso_build_id = build_id;
+CheatEngine::CheatEngine(System& system_, std::vector<CheatEntry> cheats_,
+                         const std::array<u8, 0x20>& build_id_)
+    : vm{std::make_unique<StandardVmCallbacks>(system_, metadata)},
+      cheats(std::move(cheats_)), core_timing{system_.CoreTiming()}, system{system_} {
+    metadata.main_nso_build_id = build_id_;
 }
 
 CheatEngine::~CheatEngine() {
@@ -222,8 +222,8 @@ void CheatEngine::SetMainMemoryParameters(VAddr main_region_begin, u64 main_regi
     };
 }
 
-void CheatEngine::Reload(std::vector<CheatEntry> cheats) {
-    this->cheats = std::move(cheats);
+void CheatEngine::Reload(std::vector<CheatEntry> reload_cheats) {
+    cheats = std::move(reload_cheats);
     is_pending_reload.exchange(true);
 }
 

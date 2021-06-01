@@ -13,7 +13,7 @@ namespace FileSys {
 // one and falling back to the one after. The highest priority directory (overwrites all others)
 // should be element 0 in the dirs vector.
 class LayeredVfsDirectory : public VfsDirectory {
-    LayeredVfsDirectory(std::vector<VirtualDir> dirs, std::string name);
+    explicit LayeredVfsDirectory(std::vector<VirtualDir> dirs_, std::string name_);
 
 public:
     ~LayeredVfsDirectory() override;
@@ -23,8 +23,8 @@ public:
 
     VirtualFile GetFileRelative(std::string_view path) const override;
     VirtualDir GetDirectoryRelative(std::string_view path) const override;
-    VirtualFile GetFile(std::string_view name) const override;
-    VirtualDir GetSubdirectory(std::string_view name) const override;
+    VirtualFile GetFile(std::string_view file_name) const override;
+    VirtualDir GetSubdirectory(std::string_view subdir_name) const override;
     std::string GetFullPath() const override;
 
     std::vector<VirtualFile> GetFiles() const override;
@@ -33,11 +33,11 @@ public:
     bool IsReadable() const override;
     std::string GetName() const override;
     VirtualDir GetParentDirectory() const override;
-    VirtualDir CreateSubdirectory(std::string_view name) override;
-    VirtualFile CreateFile(std::string_view name) override;
-    bool DeleteSubdirectory(std::string_view name) override;
-    bool DeleteFile(std::string_view name) override;
-    bool Rename(std::string_view name) override;
+    VirtualDir CreateSubdirectory(std::string_view subdir_name) override;
+    VirtualFile CreateFile(std::string_view file_name) override;
+    bool DeleteSubdirectory(std::string_view subdir_name) override;
+    bool DeleteFile(std::string_view file_name) override;
+    bool Rename(std::string_view new_name) override;
 
 private:
     std::vector<VirtualDir> dirs;

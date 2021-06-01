@@ -72,7 +72,7 @@ public:
     ~MemoryManager();
 
     /// Binds a renderer to the memory manager.
-    void BindRasterizer(VideoCore::RasterizerInterface& rasterizer);
+    void BindRasterizer(VideoCore::RasterizerInterface* rasterizer);
 
     [[nodiscard]] std::optional<VAddr> GpuToCpuAddress(GPUVAddr addr) const;
 
@@ -84,6 +84,9 @@ public:
 
     [[nodiscard]] u8* GetPointer(GPUVAddr addr);
     [[nodiscard]] const u8* GetPointer(GPUVAddr addr) const;
+
+    /// Returns the number of bytes until the end of the memory map containing the given GPU address
+    [[nodiscard]] size_t BytesToMapEnd(GPUVAddr gpu_addr) const noexcept;
 
     /**
      * ReadBlock and WriteBlock are full read and write operations over virtual
@@ -107,7 +110,6 @@ public:
      */
     void ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size) const;
     void WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size);
-    void CopyBlockUnsafe(GPUVAddr gpu_dest_addr, GPUVAddr gpu_src_addr, std::size_t size);
 
     /**
      * IsGranularRange checks if a gpu region can be simply read with a pointer.
@@ -131,6 +133,8 @@ private:
     void TryLockPage(PageEntry page_entry, std::size_t size);
     void TryUnlockPage(PageEntry page_entry, std::size_t size);
 
+    void FlushRegion(GPUVAddr gpu_addr, size_t size) const;
+
     [[nodiscard]] static constexpr std::size_t PageEntryIndex(GPUVAddr gpu_addr) {
         return (gpu_addr >> page_bits) & page_table_mask;
     }
@@ -150,6 +154,11 @@ private:
     VideoCore::RasterizerInterface* rasterizer = nullptr;
 
     std::vector<PageEntry> page_table;
+
+    using MapRange = std::pair<GPUVAddr, size_t>;
+    std::vector<MapRange> map_ranges;
+
+    std::vector<std::pair<VAddr, std::size_t>> cache_invalidate_queue;
 };
 
 } // namespace Tegra

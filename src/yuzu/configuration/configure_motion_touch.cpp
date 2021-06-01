@@ -4,14 +4,17 @@
 
 #include <array>
 #include <sstream>
+
 #include <QCloseEvent>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QStringListModel>
 #include <QVBoxLayout>
+
 #include "common/logging/log.h"
-#include "core/settings.h"
+#include "common/settings.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
 #include "input_common/udp/udp.h"
@@ -20,8 +23,7 @@
 #include "yuzu/configuration/configure_touch_from_button.h"
 
 CalibrationConfigurationDialog::CalibrationConfigurationDialog(QWidget* parent,
-                                                               const std::string& host, u16 port,
-                                                               u8 pad_index, u16 client_id)
+                                                               const std::string& host, u16 port)
     : QDialog(parent) {
     layout = new QVBoxLayout;
     status_label = new QLabel(tr("Communicating with the server..."));
@@ -38,7 +40,7 @@ CalibrationConfigurationDialog::CalibrationConfigurationDialog(QWidget* parent,
 
     using namespace InputCommon::CemuhookUDP;
     job = std::make_unique<CalibrationConfigurationJob>(
-        host, port, pad_index, client_id,
+        host, port,
         [this](CalibrationConfigurationJob::Status status) {
             QString text;
             switch (status) {
@@ -50,6 +52,8 @@ CalibrationConfigurationDialog::CalibrationConfigurationDialog(QWidget* parent,
                 break;
             case CalibrationConfigurationJob::Status::Completed:
                 text = tr("Configuration completed!");
+                break;
+            default:
                 break;
             }
             QMetaObject::invokeMethod(this, "UpdateLabelText", Q_ARG(QString, text));
@@ -76,19 +80,11 @@ void CalibrationConfigurationDialog::UpdateButtonText(const QString& text) {
     cancel_button->setText(text);
 }
 
-constexpr std::array<std::pair<const char*, const char*>, 2> TouchProviders = {{
-    {"emu_window", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Emulator Window")},
-    {"cemuhookudp", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "CemuhookUDP")},
-}};
-
 ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent,
                                            InputCommon::InputSubsystem* input_subsystem_)
     : QDialog(parent), input_subsystem{input_subsystem_},
       ui(std::make_unique<Ui::ConfigureMotionTouch>()) {
     ui->setupUi(this);
-    for (const auto& [provider, name] : TouchProviders) {
-        ui->touch_provider->addItem(tr(name), QString::fromUtf8(provider));
-    }
 
     ui->udp_learn_more->setOpenExternalLinks(true);
     ui->udp_learn_more->setText(
@@ -107,11 +103,7 @@ ConfigureMotionTouch::~ConfigureMotionTouch() = default;
 void ConfigureMotionTouch::SetConfiguration() {
     const Common::ParamPackage motion_param(Settings::values.motion_device);
     const Common::ParamPackage touch_param(Settings::values.touch_device);
-    const std::string motion_engine = motion_param.Get("engine", "motion_emu");
-    const std::string touch_engine = touch_param.Get("engine", "emu_window");
 
-    ui->touch_provider->setCurrentIndex(
-        ui->touch_provider->findData(QString::fromStdString(touch_engine)));
     ui->touch_from_button_checkbox->setChecked(Settings::values.use_touch_from_button);
     touch_from_button_maps = Settings::values.touch_from_button_maps;
     for (const auto& touch_map : touch_from_button_maps) {
@@ -144,30 +136,21 @@ void ConfigureMotionTouch::SetConfiguration() {
 }
 
 void ConfigureMotionTouch::UpdateUiDisplay() {
-    const QString touch_engine = ui->touch_provider->currentData().toString();
     const QString cemuhook_udp = QStringLiteral("cemuhookudp");
 
     ui->motion_sensitivity_label->setVisible(true);
     ui->motion_sensitivity->setVisible(true);
 
-    if (touch_engine == cemuhook_udp) {
-        ui->touch_calibration->setVisible(true);
-        ui->touch_calibration_config->setVisible(true);
-        ui->touch_calibration_label->setVisible(true);
-        ui->touch_calibration->setText(
-            QStringLiteral("(%1, %2) - (%3, %4)").arg(min_x).arg(min_y).arg(max_x).arg(max_y));
-    } else {
-        ui->touch_calibration->setVisible(false);
-        ui->touch_calibration_config->setVisible(false);
-        ui->touch_calibration_label->setVisible(false);
-    }
+    ui->touch_calibration->setVisible(true);
+    ui->touch_calibration_config->setVisible(true);
+    ui->touch_calibration_label->setVisible(true);
+    ui->touch_calibration->setText(
+        QStringLiteral("(%1, %2) - (%3, %4)").arg(min_x).arg(min_y).arg(max_x).arg(max_y));
 
     ui->udp_config_group_box->setVisible(true);
 }
 
 void ConfigureMotionTouch::ConnectEvents() {
-    connect(ui->touch_provider, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this](int index) { UpdateUiDisplay(); });
     connect(ui->udp_test, &QPushButton::clicked, this, &ConfigureMotionTouch::OnCemuhookUDPTest);
     connect(ui->udp_add, &QPushButton::clicked, this, &ConfigureMotionTouch::OnUDPAddServer);
     connect(ui->udp_remove, &QPushButton::clicked, this, &ConfigureMotionTouch::OnUDPDeleteServer);
@@ -183,14 +166,15 @@ void ConfigureMotionTouch::ConnectEvents() {
 }
 
 void ConfigureMotionTouch::OnUDPAddServer() {
-    QRegExp re(tr(R"re(^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4]"
-                  "[0-9]|[01]?[0-9][0-9]?)$)re")); // a valid ip address
+    // Validator for IP address
+    const QRegularExpression re(QStringLiteral(
+        R"re(^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$)re"));
     bool ok;
-    QString port_text = ui->udp_port->text();
-    QString server_text = ui->udp_server->text();
+    const QString port_text = ui->udp_port->text();
+    const QString server_text = ui->udp_server->text();
     const QString server_string = tr("%1:%2").arg(server_text, port_text);
-    int port_number = port_text.toInt(&ok, 10);
-    int row = udp_server_list_model->rowCount();
+    const int port_number = port_text.toInt(&ok, 10);
+    const int row = udp_server_list_model->rowCount();
 
     if (!ok) {
         QMessageBox::warning(this, tr("yuzu"), tr("Port number has invalid characters"));
@@ -200,7 +184,7 @@ void ConfigureMotionTouch::OnUDPAddServer() {
         QMessageBox::warning(this, tr("yuzu"), tr("Port has to be in range 0 and 65353"));
         return;
     }
-    if (!re.exactMatch(server_text)) {
+    if (!re.match(server_text).hasMatch()) {
         QMessageBox::warning(this, tr("yuzu"), tr("IP address is not valid"));
         return;
     }
@@ -232,8 +216,7 @@ void ConfigureMotionTouch::OnCemuhookUDPTest() {
     ui->udp_test->setText(tr("Testing"));
     udp_test_in_progress = true;
     InputCommon::CemuhookUDP::TestCommunication(
-        ui->udp_server->text().toStdString(), static_cast<u16>(ui->udp_port->text().toInt()), 0,
-        24872,
+        ui->udp_server->text().toStdString(), static_cast<u16>(ui->udp_port->text().toInt()),
         [this] {
             LOG_INFO(Frontend, "UDP input test success");
             QMetaObject::invokeMethod(this, "ShowUDPTestResult", Q_ARG(bool, true));
@@ -248,8 +231,7 @@ void ConfigureMotionTouch::OnConfigureTouchCalibration() {
     ui->touch_calibration_config->setEnabled(false);
     ui->touch_calibration_config->setText(tr("Configuring"));
     CalibrationConfigurationDialog dialog(this, ui->udp_server->text().toStdString(),
-                                          static_cast<u16>(ui->udp_port->text().toUInt()), 0,
-                                          24872);
+                                          static_cast<u16>(ui->udp_port->text().toUInt()));
     dialog.exec();
     if (dialog.completed) {
         min_x = dialog.min_x;
@@ -322,17 +304,11 @@ void ConfigureMotionTouch::ApplyConfiguration() {
         return;
     }
 
-    std::string touch_engine = ui->touch_provider->currentData().toString().toStdString();
-
     Common::ParamPackage touch_param{};
-    touch_param.Set("engine", std::move(touch_engine));
-
-    if (touch_engine == "cemuhookudp") {
-        touch_param.Set("min_x", min_x);
-        touch_param.Set("min_y", min_y);
-        touch_param.Set("max_x", max_x);
-        touch_param.Set("max_y", max_y);
-    }
+    touch_param.Set("min_x", min_x);
+    touch_param.Set("min_y", min_y);
+    touch_param.Set("max_x", max_x);
+    touch_param.Set("max_y", max_y);
 
     Settings::values.touch_device = touch_param.Serialize();
     Settings::values.use_touch_from_button = ui->touch_from_button_checkbox->isChecked();

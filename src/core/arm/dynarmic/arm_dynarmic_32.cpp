@@ -4,12 +4,13 @@
 
 #include <cinttypes>
 #include <memory>
-#include <dynarmic/A32/a32.h>
-#include <dynarmic/A32/config.h>
-#include <dynarmic/A32/context.h>
+#include <dynarmic/interface/A32/a32.h>
+#include <dynarmic/interface/A32/config.h>
+#include <dynarmic/interface/A32/context.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/page_table.h"
+#include "common/settings.h"
 #include "core/arm/cpu_interrupt_handler.h"
 #include "core/arm/dynarmic/arm_dynarmic_32.h"
 #include "core/arm/dynarmic/arm_dynarmic_cp15.h"
@@ -18,51 +19,51 @@
 #include "core/core_timing.h"
 #include "core/hle/kernel/svc.h"
 #include "core/memory.h"
-#include "core/settings.h"
 
 namespace Core {
 
 class DynarmicCallbacks32 : public Dynarmic::A32::UserCallbacks {
 public:
-    explicit DynarmicCallbacks32(ARM_Dynarmic_32& parent) : parent(parent) {}
+    explicit DynarmicCallbacks32(ARM_Dynarmic_32& parent_)
+        : parent{parent_}, memory(parent.system.Memory()) {}
 
     u8 MemoryRead8(u32 vaddr) override {
-        return parent.system.Memory().Read8(vaddr);
+        return memory.Read8(vaddr);
     }
     u16 MemoryRead16(u32 vaddr) override {
-        return parent.system.Memory().Read16(vaddr);
+        return memory.Read16(vaddr);
     }
     u32 MemoryRead32(u32 vaddr) override {
-        return parent.system.Memory().Read32(vaddr);
+        return memory.Read32(vaddr);
     }
     u64 MemoryRead64(u32 vaddr) override {
-        return parent.system.Memory().Read64(vaddr);
+        return memory.Read64(vaddr);
     }
 
     void MemoryWrite8(u32 vaddr, u8 value) override {
-        parent.system.Memory().Write8(vaddr, value);
+        memory.Write8(vaddr, value);
     }
     void MemoryWrite16(u32 vaddr, u16 value) override {
-        parent.system.Memory().Write16(vaddr, value);
+        memory.Write16(vaddr, value);
     }
     void MemoryWrite32(u32 vaddr, u32 value) override {
-        parent.system.Memory().Write32(vaddr, value);
+        memory.Write32(vaddr, value);
     }
     void MemoryWrite64(u32 vaddr, u64 value) override {
-        parent.system.Memory().Write64(vaddr, value);
+        memory.Write64(vaddr, value);
     }
 
     bool MemoryWriteExclusive8(u32 vaddr, u8 value, u8 expected) override {
-        return parent.system.Memory().WriteExclusive8(vaddr, value, expected);
+        return memory.WriteExclusive8(vaddr, value, expected);
     }
     bool MemoryWriteExclusive16(u32 vaddr, u16 value, u16 expected) override {
-        return parent.system.Memory().WriteExclusive16(vaddr, value, expected);
+        return memory.WriteExclusive16(vaddr, value, expected);
     }
     bool MemoryWriteExclusive32(u32 vaddr, u32 value, u32 expected) override {
-        return parent.system.Memory().WriteExclusive32(vaddr, value, expected);
+        return memory.WriteExclusive32(vaddr, value, expected);
     }
     bool MemoryWriteExclusive64(u32 vaddr, u64 value, u64 expected) override {
-        return parent.system.Memory().WriteExclusive64(vaddr, value, expected);
+        return memory.WriteExclusive64(vaddr, value, expected);
     }
 
     void InterpreterFallback(u32 pc, std::size_t num_instructions) override {
@@ -71,20 +72,16 @@ public:
     }
 
     void ExceptionRaised(u32 pc, Dynarmic::A32::Exception exception) override {
-        switch (exception) {
-        case Dynarmic::A32::Exception::UndefinedInstruction:
-        case Dynarmic::A32::Exception::UnpredictableInstruction:
-            break;
-        case Dynarmic::A32::Exception::Breakpoint:
-            break;
-        }
-        LOG_CRITICAL(Core_ARM, "ExceptionRaised(exception = {}, pc = {:08X}, code = {:08X})",
-                     static_cast<std::size_t>(exception), pc, MemoryReadCode(pc));
+        LOG_CRITICAL(Core_ARM,
+                     "ExceptionRaised(exception = {}, pc = {:08X}, code = {:08X}, thumb = {})",
+                     exception, pc, MemoryReadCode(pc), parent.IsInThumbMode());
         UNIMPLEMENTED();
     }
 
     void CallSVC(u32 swi) override {
-        Kernel::Svc::Call(parent.system, swi);
+        parent.svc_called = true;
+        parent.svc_swi = swi;
+        parent.jit->HaltExecution();
     }
 
     void AddTicks(u64 ticks) override {
@@ -116,23 +113,24 @@ public:
     }
 
     ARM_Dynarmic_32& parent;
+    Core::Memory::Memory& memory;
     std::size_t num_interpreted_instructions{};
     static constexpr u64 minimum_run_cycles = 1000U;
 };
 
-std::shared_ptr<Dynarmic::A32::Jit> ARM_Dynarmic_32::MakeJit(Common::PageTable& page_table,
-                                                             std::size_t address_space_bits) const {
+std::shared_ptr<Dynarmic::A32::Jit> ARM_Dynarmic_32::MakeJit(Common::PageTable* page_table) const {
     Dynarmic::A32::UserConfig config;
     config.callbacks = cb.get();
-    // TODO(bunnei): Implement page table for 32-bit
-    // config.page_table = &page_table.pointers;
     config.coprocessors[15] = cp15;
     config.define_unpredictable_behaviour = true;
     static constexpr std::size_t PAGE_BITS = 12;
     static constexpr std::size_t NUM_PAGE_TABLE_ENTRIES = 1 << (32 - PAGE_BITS);
-    config.page_table = reinterpret_cast<std::array<std::uint8_t*, NUM_PAGE_TABLE_ENTRIES>*>(
-        page_table.pointers.data());
+    if (page_table) {
+        config.page_table = reinterpret_cast<std::array<std::uint8_t*, NUM_PAGE_TABLE_ENTRIES>*>(
+            page_table->pointers.data());
+    }
     config.absolute_offset_page_table = true;
+    config.page_table_pointer_mask_bits = Common::PageTable::ATTRIBUTE_BITS;
     config.detect_misaligned_access_via_page_table = 16 | 32 | 64 | 128;
     config.only_detect_misalignment_via_page_table_on_page_boundary = true;
 
@@ -143,8 +141,12 @@ std::shared_ptr<Dynarmic::A32::Jit> ARM_Dynarmic_32::MakeJit(Common::PageTable& 
     // Timing
     config.wall_clock_cntpct = uses_wall_clock;
 
+    // Code cache size
+    config.code_cache_size = 512 * 1024 * 1024;
+    config.far_code_offset = 256 * 1024 * 1024;
+
     // Safe optimizations
-    if (Settings::values.cpu_accuracy == Settings::CPUAccuracy::DebugMode) {
+    if (Settings::values.cpu_accuracy.GetValue() == Settings::CPUAccuracy::DebugMode) {
         if (!Settings::values.cpuopt_page_tables) {
             config.page_table = nullptr;
         }
@@ -172,13 +174,16 @@ std::shared_ptr<Dynarmic::A32::Jit> ARM_Dynarmic_32::MakeJit(Common::PageTable& 
     }
 
     // Unsafe optimizations
-    if (Settings::values.cpu_accuracy == Settings::CPUAccuracy::Unsafe) {
+    if (Settings::values.cpu_accuracy.GetValue() == Settings::CPUAccuracy::Unsafe) {
         config.unsafe_optimizations = true;
-        if (Settings::values.cpuopt_unsafe_unfuse_fma) {
+        if (Settings::values.cpuopt_unsafe_unfuse_fma.GetValue()) {
             config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_UnfuseFMA;
         }
-        if (Settings::values.cpuopt_unsafe_reduce_fp_error) {
+        if (Settings::values.cpuopt_unsafe_reduce_fp_error.GetValue()) {
             config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_ReducedErrorFP;
+        }
+        if (Settings::values.cpuopt_unsafe_inaccurate_nan.GetValue()) {
+            config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN;
         }
     }
 
@@ -186,24 +191,31 @@ std::shared_ptr<Dynarmic::A32::Jit> ARM_Dynarmic_32::MakeJit(Common::PageTable& 
 }
 
 void ARM_Dynarmic_32::Run() {
-    jit->Run();
-}
-
-void ARM_Dynarmic_32::ExceptionalExit() {
-    jit->ExceptionalExit();
+    while (true) {
+        jit->Run();
+        if (!svc_called) {
+            break;
+        }
+        svc_called = false;
+        Kernel::Svc::Call(system, svc_swi);
+        if (shutdown) {
+            break;
+        }
+    }
 }
 
 void ARM_Dynarmic_32::Step() {
     jit->Step();
 }
 
-ARM_Dynarmic_32::ARM_Dynarmic_32(System& system, CPUInterrupts& interrupt_handlers,
-                                 bool uses_wall_clock, ExclusiveMonitor& exclusive_monitor,
-                                 std::size_t core_index)
-    : ARM_Interface{system, interrupt_handlers, uses_wall_clock},
+ARM_Dynarmic_32::ARM_Dynarmic_32(System& system_, CPUInterrupts& interrupt_handlers_,
+                                 bool uses_wall_clock_, ExclusiveMonitor& exclusive_monitor_,
+                                 std::size_t core_index_)
+    : ARM_Interface{system_, interrupt_handlers_, uses_wall_clock_},
       cb(std::make_unique<DynarmicCallbacks32>(*this)),
-      cp15(std::make_shared<DynarmicCP15>(*this)), core_index{core_index},
-      exclusive_monitor{dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor)} {}
+      cp15(std::make_shared<DynarmicCP15>(*this)), core_index{core_index_},
+      exclusive_monitor{dynamic_cast<DynarmicExclusiveMonitor&>(exclusive_monitor_)},
+      jit(MakeJit(nullptr)) {}
 
 ARM_Dynarmic_32::~ARM_Dynarmic_32() = default;
 
@@ -253,10 +265,6 @@ void ARM_Dynarmic_32::SetTPIDR_EL0(u64 value) {
     cp15->uprw = static_cast<u32>(value);
 }
 
-void ARM_Dynarmic_32::ChangeProcessorID(std::size_t new_core_id) {
-    jit->ChangeProcessorID(new_core_id);
-}
-
 void ARM_Dynarmic_32::SaveContext(ThreadContext32& ctx) {
     Dynarmic::A32::Context context;
     jit->SaveContext(context);
@@ -277,38 +285,35 @@ void ARM_Dynarmic_32::LoadContext(const ThreadContext32& ctx) {
 
 void ARM_Dynarmic_32::PrepareReschedule() {
     jit->HaltExecution();
+    shutdown = true;
 }
 
 void ARM_Dynarmic_32::ClearInstructionCache() {
-    if (!jit) {
-        return;
-    }
     jit->ClearCache();
 }
 
 void ARM_Dynarmic_32::InvalidateCacheRange(VAddr addr, std::size_t size) {
-    if (!jit) {
-        return;
-    }
     jit->InvalidateCacheRange(static_cast<u32>(addr), size);
 }
 
 void ARM_Dynarmic_32::ClearExclusiveState() {
-    if (!jit) {
-        return;
-    }
     jit->ClearExclusiveState();
 }
 
 void ARM_Dynarmic_32::PageTableChanged(Common::PageTable& page_table,
                                        std::size_t new_address_space_size_in_bits) {
+    ThreadContext32 ctx{};
+    SaveContext(ctx);
+
     auto key = std::make_pair(&page_table, new_address_space_size_in_bits);
     auto iter = jit_cache.find(key);
     if (iter != jit_cache.end()) {
         jit = iter->second;
+        LoadContext(ctx);
         return;
     }
-    jit = MakeJit(page_table, new_address_space_size_in_bits);
+    jit = MakeJit(&page_table);
+    LoadContext(ctx);
     jit_cache.emplace(key, jit);
 }
 

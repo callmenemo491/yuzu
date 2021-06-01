@@ -6,13 +6,14 @@
 
 #include "common/assert.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/core_timing_util.h"
 #include "core/frontend/emu_window.h"
 #include "core/hardware_interrupt_manager.h"
 #include "core/memory.h"
-#include "core/settings.h"
+#include "core/perf_stats.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/kepler_memory.h"
@@ -30,8 +31,7 @@ MICROPROFILE_DEFINE(GPU_wait, "GPU", "Wait for the GPU", MP_RGB(128, 128, 192));
 
 GPU::GPU(Core::System& system_, bool is_async_, bool use_nvdec_)
     : system{system_}, memory_manager{std::make_unique<Tegra::MemoryManager>(system)},
-      dma_pusher{std::make_unique<Tegra::DmaPusher>(system, *this)},
-      cdma_pusher{std::make_unique<Tegra::CDmaPusher>(*this)}, use_nvdec{use_nvdec_},
+      dma_pusher{std::make_unique<Tegra::DmaPusher>(system, *this)}, use_nvdec{use_nvdec_},
       maxwell_3d{std::make_unique<Engines::Maxwell3D>(system, *memory_manager)},
       fermi_2d{std::make_unique<Engines::Fermi2D>()},
       kepler_compute{std::make_unique<Engines::KeplerCompute>(system, *memory_manager)},
@@ -44,8 +44,8 @@ GPU::~GPU() = default;
 
 void GPU::BindRenderer(std::unique_ptr<VideoCore::RendererBase> renderer_) {
     renderer = std::move(renderer_);
+    rasterizer = renderer->ReadRasterizer();
 
-    VideoCore::RasterizerInterface& rasterizer = renderer->Rasterizer();
     memory_manager->BindRasterizer(rasterizer);
     maxwell_3d->BindRasterizer(rasterizer);
     fermi_2d->BindRasterizer(rasterizer);
@@ -104,7 +104,13 @@ void GPU::WaitFence(u32 syncpoint_id, u32 value) {
     }
     MICROPROFILE_SCOPE(GPU_wait);
     std::unique_lock lock{sync_mutex};
-    sync_cv.wait(lock, [=, this] { return syncpoints.at(syncpoint_id).load() >= value; });
+    sync_cv.wait(lock, [=, this] {
+        if (shutting_down.load(std::memory_order_relaxed)) {
+            // We're shutting down, ensure no threads continue to wait for the next syncpoint
+            return true;
+        }
+        return syncpoints.at(syncpoint_id).load() >= value;
+    });
 }
 
 void GPU::IncrementSyncPoint(const u32 syncpoint_id) {
@@ -171,7 +177,7 @@ void GPU::TickWork() {
         const std::size_t size = request.size;
         flush_requests.pop_front();
         flush_request_mutex.unlock();
-        renderer->Rasterizer().FlushRegion(addr, size);
+        rasterizer->FlushRegion(addr, size);
         current_flush_fence.store(fence);
         flush_request_mutex.lock();
     }
@@ -192,12 +198,16 @@ u64 GPU::GetTicks() const {
     return nanoseconds_num * gpu_ticks_num + (nanoseconds_rem * gpu_ticks_num) / gpu_ticks_den;
 }
 
+void GPU::RendererFrameEndNotify() {
+    system.GetPerfStats().EndGameFrame();
+}
+
 void GPU::FlushCommands() {
-    renderer->Rasterizer().FlushCommands();
+    rasterizer->FlushCommands();
 }
 
 void GPU::SyncGuestHost() {
-    renderer->Rasterizer().SyncGuestHost();
+    rasterizer->SyncGuestHost();
 }
 
 enum class GpuSemaphoreOperation {
@@ -460,7 +470,7 @@ void GPU::ProcessSemaphoreAcquire() {
 }
 
 void GPU::Start() {
-    gpu_thread.StartThread(*renderer, renderer->Context(), *dma_pusher, *cdma_pusher);
+    gpu_thread.StartThread(*renderer, renderer->Context(), *dma_pusher);
     cpu_context = renderer->GetRenderWindow().CreateSharedContext();
     cpu_context->MakeCurrent();
 }
@@ -481,11 +491,7 @@ void GPU::PushCommandBuffer(Tegra::ChCommandHeaderList& entries) {
     if (!use_nvdec) {
         return;
     }
-    // This condition fires when a video stream ends, clear all intermediary data
-    if (entries[0].raw == 0xDEADB33F) {
-        cdma_pusher.reset();
-        return;
-    }
+
     if (!cdma_pusher) {
         cdma_pusher = std::make_unique<Tegra::CDmaPusher>(*this);
     }
@@ -494,8 +500,11 @@ void GPU::PushCommandBuffer(Tegra::ChCommandHeaderList& entries) {
     // TODO(ameerj): RE proper async nvdec operation
     // gpu_thread.SubmitCommandBuffer(std::move(entries));
 
-    cdma_pusher->Push(std::move(entries));
-    cdma_pusher->DispatchCalls();
+    cdma_pusher->ProcessEntries(std::move(entries));
+}
+
+void GPU::ClearCdmaInstance() {
+    cdma_pusher.reset();
 }
 
 void GPU::SwapBuffers(const Tegra::FramebufferConfig* framebuffer) {
@@ -519,8 +528,12 @@ void GPU::TriggerCpuInterrupt(const u32 syncpoint_id, const u32 value) const {
     interrupt_manager.GPUInterruptSyncpt(syncpoint_id, value);
 }
 
-void GPU::WaitIdle() const {
-    gpu_thread.WaitIdle();
+void GPU::ShutDown() {
+    // Signal that threads should no longer block on syncpoint fences
+    shutting_down.store(true, std::memory_order_relaxed);
+    sync_cv.notify_all();
+
+    gpu_thread.ShutDown();
 }
 
 void GPU::OnCommandListEnd() {

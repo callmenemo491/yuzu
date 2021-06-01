@@ -2,11 +2,12 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <thread>
 #include "common/math_util.h"
-#include "core/settings.h"
+#include "common/settings.h"
 #include "input_common/analog_from_button.h"
 
 namespace InputCommon {
@@ -20,13 +21,16 @@ public:
         : up(std::move(up_)), down(std::move(down_)), left(std::move(left_)),
           right(std::move(right_)), modifier(std::move(modifier_)), modifier_scale(modifier_scale_),
           modifier_angle(modifier_angle_) {
+        update_thread_running.store(true);
         update_thread = std::thread(&Analog::UpdateStatus, this);
     }
 
     ~Analog() override {
-        update_thread_running = false;
-        if (update_thread.joinable()) {
-            update_thread.join();
+        if (update_thread_running.load()) {
+            update_thread_running.store(false);
+            if (update_thread.joinable()) {
+                update_thread.join();
+            }
         }
     }
 
@@ -58,7 +62,7 @@ public:
     }
 
     void UpdateStatus() {
-        while (update_thread_running) {
+        while (update_thread_running.load()) {
             const float coef = modifier->GetStatus() ? modifier_scale : 1.0f;
 
             bool r = right->GetStatus();
@@ -135,6 +139,10 @@ public:
                                static_cast<float>(y) * coef * (x == 0 ? 1.0f : SQRT_HALF));
     }
 
+    Input::AnalogProperties GetAnalogProperties() const override {
+        return {modifier_scale, 1.0f, 0.5f};
+    }
+
     bool GetAnalogDirectionStatus(Input::AnalogDirection direction) const override {
         switch (direction) {
         case Input::AnalogDirection::RIGHT:
@@ -160,7 +168,7 @@ private:
     float angle{};
     float amplitude{};
     std::thread update_thread;
-    bool update_thread_running{true};
+    std::atomic<bool> update_thread_running{};
 };
 
 std::unique_ptr<Input::AnalogDevice> AnalogFromButton::Create(const Common::ParamPackage& params) {

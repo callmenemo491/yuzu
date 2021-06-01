@@ -61,14 +61,13 @@ private:
     RealVfsFile(RealVfsFilesystem& base, std::shared_ptr<Common::FS::IOFile> backing,
                 const std::string& path, Mode perms = Mode::Read);
 
-    bool Close();
+    void Close();
 
     RealVfsFilesystem& base;
     std::shared_ptr<Common::FS::IOFile> backing;
     std::string path;
     std::string parent_path;
     std::vector<std::string> path_components;
-    std::vector<std::string> parent_components;
     Mode perms;
 };
 
@@ -79,12 +78,12 @@ class RealVfsDirectory : public VfsDirectory {
 public:
     ~RealVfsDirectory() override;
 
-    VirtualFile GetFileRelative(std::string_view path) const override;
-    VirtualDir GetDirectoryRelative(std::string_view path) const override;
+    VirtualFile GetFileRelative(std::string_view relative_path) const override;
+    VirtualDir GetDirectoryRelative(std::string_view relative_path) const override;
     VirtualFile GetFile(std::string_view name) const override;
     VirtualDir GetSubdirectory(std::string_view name) const override;
-    VirtualFile CreateFileRelative(std::string_view path) override;
-    VirtualDir CreateDirectoryRelative(std::string_view path) override;
+    VirtualFile CreateFileRelative(std::string_view relative_path) override;
+    VirtualDir CreateDirectoryRelative(std::string_view relative_path) override;
     bool DeleteSubdirectoryRecursive(std::string_view name) override;
     std::vector<VirtualFile> GetFiles() const override;
     std::vector<VirtualDir> GetSubdirectories() const override;
@@ -110,7 +109,6 @@ private:
     std::string path;
     std::string parent_path;
     std::vector<std::string> path_components;
-    std::vector<std::string> parent_components;
     Mode perms;
 };
 

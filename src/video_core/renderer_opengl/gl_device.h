@@ -10,11 +10,9 @@
 
 namespace OpenGL {
 
-static constexpr u32 EmulationUniformBlockBinding = 0;
-
-class Device final {
+class Device {
 public:
-    struct BaseBindings final {
+    struct BaseBindings {
         u32 uniform_buffer{};
         u32 shader_storage_buffer{};
         u32 sampler{};
@@ -96,6 +94,10 @@ public:
         return has_precise_bug;
     }
 
+    bool HasBrokenTextureViewFormats() const {
+        return has_broken_texture_view_formats;
+    }
+
     bool HasFastBufferSubData() const {
         return has_fast_buffer_sub_data;
     }
@@ -114,6 +116,14 @@ public:
 
     bool UseAsynchronousShaders() const {
         return use_asynchronous_shaders;
+    }
+
+    bool UseDriverCache() const {
+        return use_driver_cache;
+    }
+
+    bool HasDepthBufferFloat() const {
+        return has_depth_buffer_float;
     }
 
 private:
@@ -137,11 +147,14 @@ private:
     bool has_variable_aoffi{};
     bool has_component_indexing_bug{};
     bool has_precise_bug{};
+    bool has_broken_texture_view_formats{};
     bool has_fast_buffer_sub_data{};
     bool has_nv_viewport_array2{};
     bool has_debugging_tool_attached{};
     bool use_assembly_shaders{};
     bool use_asynchronous_shaders{};
+    bool use_driver_cache{};
+    bool has_depth_buffer_float{};
 };
 
 } // namespace OpenGL

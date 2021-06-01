@@ -15,10 +15,8 @@
 #include "video_core/shader/shader_ir.h"
 
 namespace Vulkan {
-class VKDevice;
-}
 
-namespace Vulkan {
+class Device;
 
 using Maxwell = Tegra::Engines::Maxwell3D::Regs;
 using UniformTexelEntry = VideoCommon::Shader::SamplerEntry;
@@ -41,24 +39,7 @@ private:
     u32 index{};
 };
 
-class GlobalBufferEntry {
-public:
-    constexpr explicit GlobalBufferEntry(u32 cbuf_index_, u32 cbuf_offset_, bool is_written_)
-        : cbuf_index{cbuf_index_}, cbuf_offset{cbuf_offset_}, is_written{is_written_} {}
-
-    constexpr u32 GetCbufIndex() const {
-        return cbuf_index;
-    }
-
-    constexpr u32 GetCbufOffset() const {
-        return cbuf_offset;
-    }
-
-    constexpr bool IsWritten() const {
-        return is_written;
-    }
-
-private:
+struct GlobalBufferEntry {
     u32 cbuf_index{};
     u32 cbuf_offset{};
     bool is_written{};
@@ -80,6 +61,7 @@ struct ShaderEntries {
     std::set<u32> attributes;
     std::array<bool, Maxwell::NumClipDistances> clip_distances{};
     std::size_t shader_length{};
+    u32 enabled_uniform_buffers{};
     bool uses_warps{};
 };
 
@@ -109,7 +91,7 @@ struct SPIRVShader {
 
 ShaderEntries GenerateShaderEntries(const VideoCommon::Shader::ShaderIR& ir);
 
-std::vector<u32> Decompile(const VKDevice& device, const VideoCommon::Shader::ShaderIR& ir,
+std::vector<u32> Decompile(const Device& device, const VideoCommon::Shader::ShaderIR& ir,
                            Tegra::Engines::ShaderType stage,
                            const VideoCommon::Shader::Registry& registry,
                            const Specialization& specialization);

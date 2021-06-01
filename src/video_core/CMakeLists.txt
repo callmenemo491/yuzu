@@ -1,10 +1,9 @@
 add_subdirectory(host_shaders)
 
 add_library(video_core STATIC
-    buffer_cache/buffer_block.h
+    buffer_cache/buffer_base.h
+    buffer_cache/buffer_cache.cpp
     buffer_cache/buffer_cache.h
-    buffer_cache/map_interval.cpp
-    buffer_cache/map_interval.h
     cdma_pusher.cpp
     cdma_pusher.h
     command_classes/codecs/codec.cpp
@@ -66,8 +65,6 @@ add_library(video_core STATIC
     guest_driver.h
     memory_manager.cpp
     memory_manager.h
-    morton.cpp
-    morton.h
     query_cache.h
     rasterizer_accelerated.cpp
     rasterizer_accelerated.h
@@ -115,8 +112,6 @@ add_library(video_core STATIC
     renderer_vulkan/fixed_pipeline_state.h
     renderer_vulkan/maxwell_to_vk.cpp
     renderer_vulkan/maxwell_to_vk.h
-    renderer_vulkan/nsight_aftermath_tracker.cpp
-    renderer_vulkan/nsight_aftermath_tracker.h
     renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/renderer_vulkan.cpp
     renderer_vulkan/vk_blit_screen.cpp
@@ -131,16 +126,12 @@ add_library(video_core STATIC
     renderer_vulkan/vk_compute_pipeline.h
     renderer_vulkan/vk_descriptor_pool.cpp
     renderer_vulkan/vk_descriptor_pool.h
-    renderer_vulkan/vk_device.cpp
-    renderer_vulkan/vk_device.h
     renderer_vulkan/vk_fence_manager.cpp
     renderer_vulkan/vk_fence_manager.h
     renderer_vulkan/vk_graphics_pipeline.cpp
     renderer_vulkan/vk_graphics_pipeline.h
     renderer_vulkan/vk_master_semaphore.cpp
     renderer_vulkan/vk_master_semaphore.h
-    renderer_vulkan/vk_memory_manager.cpp
-    renderer_vulkan/vk_memory_manager.h
     renderer_vulkan/vk_pipeline_cache.cpp
     renderer_vulkan/vk_pipeline_cache.h
     renderer_vulkan/vk_query_cache.cpp
@@ -159,16 +150,12 @@ add_library(video_core STATIC
     renderer_vulkan/vk_staging_buffer_pool.h
     renderer_vulkan/vk_state_tracker.cpp
     renderer_vulkan/vk_state_tracker.h
-    renderer_vulkan/vk_stream_buffer.cpp
-    renderer_vulkan/vk_stream_buffer.h
     renderer_vulkan/vk_swapchain.cpp
     renderer_vulkan/vk_swapchain.h
     renderer_vulkan/vk_texture_cache.cpp
     renderer_vulkan/vk_texture_cache.h
     renderer_vulkan/vk_update_descriptor.cpp
     renderer_vulkan/vk_update_descriptor.h
-    renderer_vulkan/wrapper.cpp
-    renderer_vulkan/wrapper.h
     shader_cache.h
     shader_notify.cpp
     shader_notify.h
@@ -249,7 +236,6 @@ add_library(video_core STATIC
     texture_cache/types.h
     texture_cache/util.cpp
     texture_cache/util.h
-    textures/astc.cpp
     textures/astc.h
     textures/decoders.cpp
     textures/decoders.h
@@ -257,6 +243,22 @@ add_library(video_core STATIC
     textures/texture.h
     video_core.cpp
     video_core.h
+    vulkan_common/vulkan_debug_callback.cpp
+    vulkan_common/vulkan_debug_callback.h
+    vulkan_common/vulkan_device.cpp
+    vulkan_common/vulkan_device.h
+    vulkan_common/vulkan_instance.cpp
+    vulkan_common/vulkan_instance.h
+    vulkan_common/vulkan_library.cpp
+    vulkan_common/vulkan_library.h
+    vulkan_common/vulkan_memory_allocator.cpp
+    vulkan_common/vulkan_memory_allocator.h
+    vulkan_common/vulkan_surface.cpp
+    vulkan_common/vulkan_surface.h
+    vulkan_common/vulkan_wrapper.cpp
+    vulkan_common/vulkan_wrapper.h
+    vulkan_common/nsight_aftermath_tracker.cpp
+    vulkan_common/nsight_aftermath_tracker.h
 )
 
 create_target_directory_groups(video_core)
@@ -264,13 +266,12 @@ create_target_directory_groups(video_core)
 target_link_libraries(video_core PUBLIC common core)
 target_link_libraries(video_core PRIVATE glad xbyak)
 
-if (MSVC)
-    target_include_directories(video_core PRIVATE ${FFMPEG_INCLUDE_DIR})
-    target_link_libraries(video_core PUBLIC ${FFMPEG_LIBRARY_DIR}/swscale.lib ${FFMPEG_LIBRARY_DIR}/avcodec.lib ${FFMPEG_LIBRARY_DIR}/avutil.lib)
-else()
-    target_include_directories(video_core PRIVATE ${FFMPEG_INCLUDE_DIR})
-    target_link_libraries(video_core PRIVATE ${FFMPEG_LIBRARIES})
+if (YUZU_USE_BUNDLED_FFMPEG AND NOT WIN32)
+    add_dependencies(video_core ffmpeg-build)
 endif()
+
+target_include_directories(video_core PRIVATE ${FFmpeg_INCLUDE_DIR})
+target_link_libraries(video_core PRIVATE ${FFmpeg_LIBRARIES})
 
 add_dependencies(video_core host_shaders)
 target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
@@ -279,10 +280,10 @@ target_link_libraries(video_core PRIVATE sirit)
 
 if (ENABLE_NSIGHT_AFTERMATH)
     if (NOT DEFINED ENV{NSIGHT_AFTERMATH_SDK})
-        message(ERROR "Environment variable NSIGHT_AFTERMATH_SDK has to be provided")
+        message(FATAL_ERROR "Environment variable NSIGHT_AFTERMATH_SDK has to be provided")
     endif()
     if (NOT WIN32)
-        message(ERROR "Nsight Aftermath doesn't support non-Windows platforms")
+        message(FATAL_ERROR "Nsight Aftermath doesn't support non-Windows platforms")
     endif()
     target_compile_definitions(video_core PRIVATE HAS_NSIGHT_AFTERMATH)
     target_include_directories(video_core PRIVATE "$ENV{NSIGHT_AFTERMATH_SDK}/include")
@@ -304,9 +305,7 @@ else()
         -Werror=pessimizing-move
         -Werror=redundant-move
         -Werror=shadow
-        -Werror=switch
         -Werror=type-limits
-        -Werror=unused-variable
 
         $<$<CXX_COMPILER_ID:GNU>:-Werror=class-memaccess>
         $<$<CXX_COMPILER_ID:GNU>:-Werror=unused-but-set-parameter>

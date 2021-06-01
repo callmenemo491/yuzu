@@ -9,7 +9,7 @@
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "core/frontend/applets/general_frontend.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/result.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/am/applets/general_backend.h"
@@ -37,8 +37,9 @@ static void LogCurrentStorage(AppletDataBroker& broker, std::string_view prefix)
     }
 }
 
-Auth::Auth(Core::System& system_, Core::Frontend::ParentalControlsApplet& frontend_)
-    : Applet{system_.Kernel()}, frontend{frontend_}, system{system_} {}
+Auth::Auth(Core::System& system_, LibraryAppletMode applet_mode_,
+           Core::Frontend::ParentalControlsApplet& frontend_)
+    : Applet{system_, applet_mode_}, frontend{frontend_}, system{system_} {}
 
 Auth::~Auth() = default;
 
@@ -95,7 +96,7 @@ void Auth::Execute() {
 
     switch (type) {
     case AuthAppletType::ShowParentalAuthentication: {
-        const auto callback = [this](bool successful) { AuthFinished(successful); };
+        const auto callback = [this](bool is_successful) { AuthFinished(is_successful); };
 
         if (arg0 == 1 && arg1 == 0 && arg2 == 1) {
             // ShowAuthenticatorForConfiguration
@@ -152,8 +153,9 @@ void Auth::AuthFinished(bool is_successful) {
     broker.SignalStateChanged();
 }
 
-PhotoViewer::PhotoViewer(Core::System& system_, const Core::Frontend::PhotoViewerApplet& frontend_)
-    : Applet{system_.Kernel()}, frontend{frontend_}, system{system_} {}
+PhotoViewer::PhotoViewer(Core::System& system_, LibraryAppletMode applet_mode_,
+                         const Core::Frontend::PhotoViewerApplet& frontend_)
+    : Applet{system_, applet_mode_}, frontend{frontend_}, system{system_} {}
 
 PhotoViewer::~PhotoViewer() = default;
 
@@ -202,8 +204,8 @@ void PhotoViewer::ViewFinished() {
     broker.SignalStateChanged();
 }
 
-StubApplet::StubApplet(Core::System& system_, AppletId id_)
-    : Applet{system_.Kernel()}, id{id_}, system{system_} {}
+StubApplet::StubApplet(Core::System& system_, AppletId id_, LibraryAppletMode applet_mode_)
+    : Applet{system_, applet_mode_}, id{id_}, system{system_} {}
 
 StubApplet::~StubApplet() = default;
 

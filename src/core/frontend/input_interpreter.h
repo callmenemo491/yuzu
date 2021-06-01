@@ -66,6 +66,30 @@ public:
     /// Gets a button state from HID and inserts it into the array of button states.
     void PollInput();
 
+    /// Resets all the button states to their defaults.
+    void ResetButtonStates();
+
+    /**
+     * Checks whether the button is pressed.
+     *
+     * @param button The button to check.
+     *
+     * @returns True when the button is pressed.
+     */
+    [[nodiscard]] bool IsButtonPressed(HIDButton button) const;
+
+    /**
+     * Checks whether any of the buttons in the parameter list is pressed.
+     *
+     * @tparam HIDButton The buttons to check.
+     *
+     * @returns True when at least one of the buttons is pressed.
+     */
+    template <HIDButton... T>
+    [[nodiscard]] bool IsAnyButtonPressed() {
+        return (IsButtonPressed(T) || ...);
+    }
+
     /**
      * The specified button is considered to be pressed once
      * if it is currently pressed and not pressed previously.
@@ -79,12 +103,12 @@ public:
     /**
      * Checks whether any of the buttons in the parameter list is pressed once.
      *
-     * @tparam HIDButton The buttons to check.
+     * @tparam T The buttons to check.
      *
      * @returns True when at least one of the buttons is pressed once.
      */
     template <HIDButton... T>
-    [[nodiscard]] bool IsAnyButtonPressedOnce() {
+    [[nodiscard]] bool IsAnyButtonPressedOnce() const {
         return (IsButtonPressedOnce(T) || ...);
     }
 
@@ -100,12 +124,12 @@ public:
     /**
      * Checks whether any of the buttons in the parameter list is held down.
      *
-     * @tparam HIDButton The buttons to check.
+     * @tparam T The buttons to check.
      *
      * @returns True when at least one of the buttons is held down.
      */
     template <HIDButton... T>
-    [[nodiscard]] bool IsAnyButtonHeld() {
+    [[nodiscard]] bool IsAnyButtonHeld() const {
         return (IsButtonHeld(T) || ...);
     }
 

@@ -9,7 +9,6 @@
 #include <locale>
 #include <sstream>
 
-#include "common/common_paths.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
 
@@ -93,18 +92,6 @@ bool SplitPath(const std::string& full_path, std::string* _pPath, std::string* _
     return true;
 }
 
-void BuildCompleteFilename(std::string& _CompleteFilename, const std::string& _Path,
-                           const std::string& _Filename) {
-    _CompleteFilename = _Path;
-
-    // check for seperator
-    if (DIR_SEP_CHR != *_CompleteFilename.rbegin())
-        _CompleteFilename += DIR_SEP_CHR;
-
-    // add the filename
-    _CompleteFilename += _Filename;
-}
-
 void SplitString(const std::string& str, const char delim, std::vector<std::string>& output) {
     std::istringstream iss(str);
     output.resize(1);
@@ -141,27 +128,13 @@ std::string ReplaceAll(std::string result, const std::string& src, const std::st
 }
 
 std::string UTF16ToUTF8(const std::u16string& input) {
-#ifdef _MSC_VER
-    // Workaround for missing char16_t/char32_t instantiations in MSVC2017
-    std::wstring_convert<std::codecvt_utf8_utf16<__int16>, __int16> convert;
-    std::basic_string<__int16> tmp_buffer(input.cbegin(), input.cend());
-    return convert.to_bytes(tmp_buffer);
-#else
     std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> convert;
     return convert.to_bytes(input);
-#endif
 }
 
 std::u16string UTF8ToUTF16(const std::string& input) {
-#ifdef _MSC_VER
-    // Workaround for missing char16_t/char32_t instantiations in MSVC2017
-    std::wstring_convert<std::codecvt_utf8_utf16<__int16>, __int16> convert;
-    auto tmp_buffer = convert.from_bytes(input);
-    return std::u16string(tmp_buffer.cbegin(), tmp_buffer.cend());
-#else
     std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> convert;
     return convert.from_bytes(input);
-#endif
 }
 
 #ifdef _WIN32

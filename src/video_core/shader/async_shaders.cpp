@@ -64,6 +64,7 @@ void AsyncShaders::FreeWorkers() {
 
 void AsyncShaders::KillWorkers() {
     is_thread_exiting.store(true);
+    cv.notify_all();
     for (auto& thread : worker_threads) {
         thread.detach();
     }
@@ -129,12 +130,21 @@ void AsyncShaders::QueueOpenGLShader(const OpenGL::Device& device,
         .compiler_settings = compiler_settings,
         .registry = registry,
         .cpu_address = cpu_addr,
+        .pp_cache = nullptr,
+        .vk_device = nullptr,
+        .scheduler = nullptr,
+        .descriptor_pool = nullptr,
+        .update_descriptor_queue = nullptr,
+        .bindings{},
+        .program{},
+        .key{},
+        .num_color_buffers = 0,
     });
     cv.notify_one();
 }
 
 void AsyncShaders::QueueVulkanShader(Vulkan::VKPipelineCache* pp_cache,
-                                     const Vulkan::VKDevice& device, Vulkan::VKScheduler& scheduler,
+                                     const Vulkan::Device& device, Vulkan::VKScheduler& scheduler,
                                      Vulkan::VKDescriptorPool& descriptor_pool,
                                      Vulkan::VKUpdateDescriptorQueue& update_descriptor_queue,
                                      std::vector<VkDescriptorSetLayoutBinding> bindings,
@@ -143,6 +153,15 @@ void AsyncShaders::QueueVulkanShader(Vulkan::VKPipelineCache* pp_cache,
     std::unique_lock lock(queue_mutex);
     pending_queue.push({
         .backend = Backend::Vulkan,
+        .device = nullptr,
+        .shader_type{},
+        .uid = 0,
+        .code{},
+        .code_b{},
+        .main_offset = 0,
+        .compiler_settings{},
+        .registry{},
+        .cpu_address = 0,
         .pp_cache = pp_cache,
         .vk_device = &device,
         .scheduler = &scheduler,

@@ -27,7 +27,7 @@
     url = https://github.com/ReinUsesLisp/sirit
 [submodule "mbedtls"]
     path = externals/mbedtls
-    url = https://github.com/DarkLordZach/mbedtls
+    url = https://github.com/yuzu-emu/mbedtls
 [submodule "libzip"]
     path = externals/libzip/libzip
     url = https://github.com/nih-at/libzip.git
@@ -37,3 +37,9 @@
 [submodule "opus"]
 	path = externals/opus/opus
 	url = https://github.com/xiph/opus.git
+[submodule "ffmpeg"]
+	path = externals/ffmpeg
+	url = https://git.ffmpeg.org/ffmpeg.git
+[submodule "SDL"]
+	path = externals/SDL
+	url = https://github.com/libsdl-org/SDL.git

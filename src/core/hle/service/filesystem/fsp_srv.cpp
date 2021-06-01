@@ -25,7 +25,7 @@
 #include "core/file_sys/system_archive/system_archive.h"
 #include "core/file_sys/vfs.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/process.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp_srv.h"
 #include "core/reporter.h"
@@ -118,9 +118,13 @@ public:
     explicit IFile(Core::System& system_, FileSys::VirtualFile backend_)
         : ServiceFramework{system_, "IFile"}, backend(std::move(backend_)) {
         static const FunctionInfo functions[] = {
-            {0, &IFile::Read, "Read"},       {1, &IFile::Write, "Write"},
-            {2, &IFile::Flush, "Flush"},     {3, &IFile::SetSize, "SetSize"},
-            {4, &IFile::GetSize, "GetSize"}, {5, nullptr, "OperateRange"},
+            {0, &IFile::Read, "Read"},
+            {1, &IFile::Write, "Write"},
+            {2, &IFile::Flush, "Flush"},
+            {3, &IFile::SetSize, "SetSize"},
+            {4, &IFile::GetSize, "GetSize"},
+            {5, nullptr, "OperateRange"},
+            {6, nullptr, "OperateRangeWithBuffer"},
         };
         RegisterHandlers(functions);
     }
@@ -333,13 +337,14 @@ public:
         const auto file_buffer = ctx.ReadBuffer();
         const std::string name = Common::StringFromBuffer(file_buffer);
 
-        const u64 mode = rp.Pop<u64>();
-        const u32 size = rp.Pop<u32>();
+        const u64 file_mode = rp.Pop<u64>();
+        const u32 file_size = rp.Pop<u32>();
 
-        LOG_DEBUG(Service_FS, "called. file={}, mode=0x{:X}, size=0x{:08X}", name, mode, size);
+        LOG_DEBUG(Service_FS, "called. file={}, mode=0x{:X}, size=0x{:08X}", name, file_mode,
+                  file_size);
 
         IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(backend.CreateFile(name, size));
+        rb.Push(backend.CreateFile(name, file_size));
     }
 
     void DeleteFile(Kernel::HLERequestContext& ctx) {
@@ -708,7 +713,10 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {84, nullptr, "ListApplicationAccessibleSaveDataOwnerId"},
         {85, nullptr, "OpenSaveDataTransferManagerForSaveDataRepair"},
         {86, nullptr, "OpenSaveDataMover"},
+        {87, nullptr, "OpenSaveDataTransferManagerForRepair"},
         {100, nullptr, "OpenImageDirectoryFileSystem"},
+        {101, nullptr, "OpenBaseFileSystem"},
+        {102, nullptr, "FormatBaseFileSystem"},
         {110, nullptr, "OpenContentStorageFileSystem"},
         {120, nullptr, "OpenCloudBackupWorkStorageFileSystem"},
         {130, nullptr, "OpenCustomStorageFileSystem"},
@@ -764,10 +772,12 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {1008, nullptr, "OpenRegisteredUpdatePartition"},
         {1009, nullptr, "GetAndClearMemoryReportInfo"},
         {1010, nullptr, "SetDataStorageRedirectTarget"},
-        {1011, &FSP_SRV::GetAccessLogVersionInfo, "GetAccessLogVersionInfo"},
+        {1011, &FSP_SRV::GetProgramIndexForAccessLog, "GetProgramIndexForAccessLog"},
         {1012, nullptr, "GetFsStackUsage"},
         {1013, nullptr, "UnsetSaveDataRootPath"},
         {1014, nullptr, "OutputMultiProgramTagAccessLog"},
+        {1016, nullptr, "FlushAccessLogOnSdCard"},
+        {1017, nullptr, "OutputApplicationInfoAccessLog"},
         {1100, nullptr, "OverrideSaveDataTransferTokenSignVerificationKey"},
         {1110, nullptr, "CorruptSaveDataFileSystemBySaveDataSpaceId2"},
         {1200, &FSP_SRV::OpenMultiCommitManager, "OpenMultiCommitManager"},
@@ -926,8 +936,8 @@ void FSP_SRV::ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute(
 void FSP_SRV::OpenDataStorageByCurrentProcess(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_FS, "called");
 
-    auto romfs = fsc.OpenRomFSCurrentProcess();
-    if (romfs.Failed()) {
+    auto current_romfs = fsc.OpenRomFSCurrentProcess();
+    if (current_romfs.Failed()) {
         // TODO (bunnei): Find the right error code to use here
         LOG_CRITICAL(Service_FS, "no file system interface available!");
         IPC::ResponseBuilder rb{ctx, 2};
@@ -935,7 +945,7 @@ void FSP_SRV::OpenDataStorageByCurrentProcess(Kernel::HLERequestContext& ctx) {
         return;
     }
 
-    auto storage = std::make_shared<IStorage>(system, std::move(romfs.Unwrap()));
+    auto storage = std::make_shared<IStorage>(system, std::move(current_romfs.Unwrap()));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -1001,10 +1011,10 @@ void FSP_SRV::OpenDataStorageWithProgramIndex(Kernel::HLERequestContext& ctx) {
 
     LOG_DEBUG(Service_FS, "called, program_index={}", program_index);
 
-    auto romfs = fsc.OpenPatchedRomFSWithProgramIndex(
+    auto patched_romfs = fsc.OpenPatchedRomFSWithProgramIndex(
         system.CurrentProcess()->GetTitleID(), program_index, FileSys::ContentRecordType::Program);
 
-    if (romfs.Failed()) {
+    if (patched_romfs.Failed()) {
         // TODO: Find the right error code to use here
         LOG_ERROR(Service_FS, "could not open storage with program_index={}", program_index);
 
@@ -1013,7 +1023,7 @@ void FSP_SRV::OpenDataStorageWithProgramIndex(Kernel::HLERequestContext& ctx) {
         return;
     }
 
-    auto storage = std::make_shared<IStorage>(system, std::move(romfs.Unwrap()));
+    auto storage = std::make_shared<IStorage>(system, std::move(patched_romfs.Unwrap()));
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(RESULT_SUCCESS);
@@ -1051,7 +1061,7 @@ void FSP_SRV::OutputAccessLogToSdCard(Kernel::HLERequestContext& ctx) {
     rb.Push(RESULT_SUCCESS);
 }
 
-void FSP_SRV::GetAccessLogVersionInfo(Kernel::HLERequestContext& ctx) {
+void FSP_SRV::GetProgramIndexForAccessLog(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_FS, "called");
 
     IPC::ResponseBuilder rb{ctx, 4};

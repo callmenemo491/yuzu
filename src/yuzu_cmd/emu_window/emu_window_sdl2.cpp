@@ -2,7 +2,16 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+// Ignore -Wimplicit-fallthrough due to https://github.com/libsdl-org/SDL/issues/4307
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wimplicit-fallthrough"
+#endif
 #include <SDL.h>
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
 #include "core/core.h"
@@ -12,6 +21,7 @@
 #include "input_common/mouse/mouse_input.h"
 #include "input_common/sdl/sdl.h"
 #include "yuzu_cmd/emu_window/emu_window_sdl2.h"
+#include "yuzu_cmd/yuzu_icon.h"
 
 EmuWindow_SDL2::EmuWindow_SDL2(InputCommon::InputSubsystem* input_subsystem_)
     : input_subsystem{input_subsystem_} {
@@ -29,22 +39,41 @@ EmuWindow_SDL2::~EmuWindow_SDL2() {
 }
 
 void EmuWindow_SDL2::OnMouseMotion(s32 x, s32 y) {
-    TouchMoved((unsigned)std::max(x, 0), (unsigned)std::max(y, 0));
-    input_subsystem->GetMouse()->MouseMove(x, y);
+    TouchMoved((unsigned)std::max(x, 0), (unsigned)std::max(y, 0), 0);
+
+    input_subsystem->GetMouse()->MouseMove(x, y, 0, 0);
+}
+
+MouseInput::MouseButton EmuWindow_SDL2::SDLButtonToMouseButton(u32 button) const {
+    switch (button) {
+    case SDL_BUTTON_LEFT:
+        return MouseInput::MouseButton::Left;
+    case SDL_BUTTON_RIGHT:
+        return MouseInput::MouseButton::Right;
+    case SDL_BUTTON_MIDDLE:
+        return MouseInput::MouseButton::Wheel;
+    case SDL_BUTTON_X1:
+        return MouseInput::MouseButton::Backward;
+    case SDL_BUTTON_X2:
+        return MouseInput::MouseButton::Forward;
+    default:
+        return MouseInput::MouseButton::Undefined;
+    }
 }
 
 void EmuWindow_SDL2::OnMouseButton(u32 button, u8 state, s32 x, s32 y) {
+    const auto mouse_button = SDLButtonToMouseButton(button);
     if (button == SDL_BUTTON_LEFT) {
         if (state == SDL_PRESSED) {
-            TouchPressed((unsigned)std::max(x, 0), (unsigned)std::max(y, 0));
+            TouchPressed((unsigned)std::max(x, 0), (unsigned)std::max(y, 0), 0);
         } else {
-            TouchReleased();
+            TouchReleased(0);
         }
-    } else if (button == SDL_BUTTON_RIGHT) {
+    } else {
         if (state == SDL_PRESSED) {
-            input_subsystem->GetMouse()->PressButton(x, y, button);
+            input_subsystem->GetMouse()->PressButton(x, y, mouse_button);
         } else {
-            input_subsystem->GetMouse()->ReleaseButton(button);
+            input_subsystem->GetMouse()->ReleaseButton(mouse_button);
         }
     }
 }
@@ -66,16 +95,16 @@ void EmuWindow_SDL2::OnFingerDown(float x, float y) {
     // 3DS does
 
     const auto [px, py] = TouchToPixelPos(x, y);
-    TouchPressed(px, py);
+    TouchPressed(px, py, 0);
 }
 
 void EmuWindow_SDL2::OnFingerMotion(float x, float y) {
     const auto [px, py] = TouchToPixelPos(x, y);
-    TouchMoved(px, py);
+    TouchMoved(px, py, 0);
 }
 
 void EmuWindow_SDL2::OnFingerUp() {
-    TouchReleased();
+    TouchReleased(0);
 }
 
 void EmuWindow_SDL2::OnKeyEvent(int key, u8 state) {
@@ -186,13 +215,29 @@ void EmuWindow_SDL2::WaitEvent() {
         const auto results = Core::System::GetInstance().GetAndResetPerfStats();
         const auto title =
             fmt::format("yuzu {} | {}-{} | FPS: {:.0f} ({:.0f}%)", Common::g_build_fullname,
-                        Common::g_scm_branch, Common::g_scm_desc, results.game_fps,
+                        Common::g_scm_branch, Common::g_scm_desc, results.average_game_fps,
                         results.emulation_speed * 100.0);
         SDL_SetWindowTitle(render_window, title.c_str());
         last_time = current_time;
     }
 }
 
-void EmuWindow_SDL2::OnMinimalClientAreaChangeRequest(std::pair<unsigned, unsigned> minimal_size) {
+void EmuWindow_SDL2::SetWindowIcon() {
+    SDL_RWops* const yuzu_icon_stream = SDL_RWFromConstMem((void*)yuzu_icon, yuzu_icon_size);
+    if (yuzu_icon_stream == nullptr) {
+        LOG_WARNING(Frontend, "Failed to create yuzu icon stream.");
+        return;
+    }
+    SDL_Surface* const window_icon = SDL_LoadBMP_RW(yuzu_icon_stream, 1);
+    if (window_icon == nullptr) {
+        LOG_WARNING(Frontend, "Failed to read BMP from stream.");
+        return;
+    }
+    // The icon is attached to the window pointer
+    SDL_SetWindowIcon(render_window, window_icon);
+    SDL_FreeSurface(window_icon);
+}
+
+void EmuWindow_SDL2::OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) {
     SDL_SetWindowMinimumSize(render_window, minimal_size.first, minimal_size.second);
 }

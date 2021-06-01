@@ -4,11 +4,12 @@
 
 #include <QGraphicsItem>
 #include <QtConcurrent/QtConcurrent>
+#include "common/settings.h"
 #include "core/hle/service/bcat/backend/boxcat.h"
-#include "core/settings.h"
 #include "ui_configure_service.h"
 #include "yuzu/configuration/configure_service.h"
 
+#ifdef YUZU_ENABLE_BOXCAT
 namespace {
 QString FormatEventStatusString(const Service::BCAT::EventStatus& status) {
     QString out;
@@ -32,6 +33,7 @@ QString FormatEventStatusString(const Service::BCAT::EventStatus& status) {
     return out;
 }
 } // Anonymous namespace
+#endif
 
 ConfigureService::ConfigureService(QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureService>()) {

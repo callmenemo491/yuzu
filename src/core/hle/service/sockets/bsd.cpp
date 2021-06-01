@@ -13,7 +13,7 @@
 #include "common/microprofile.h"
 #include "common/thread.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/thread.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/sockets/bsd.h"
 #include "core/hle/service/sockets/sockets_translate.h"
 #include "core/network/network.h"
@@ -42,7 +42,9 @@ void BSD::PollWork::Execute(BSD* bsd) {
 }
 
 void BSD::PollWork::Response(Kernel::HLERequestContext& ctx) {
-    ctx.WriteBuffer(write_buffer);
+    if (write_buffer.size() > 0) {
+        ctx.WriteBuffer(write_buffer);
+    }
 
     IPC::ResponseBuilder rb{ctx, 4};
     rb.Push(RESULT_SUCCESS);
@@ -55,7 +57,9 @@ void BSD::AcceptWork::Execute(BSD* bsd) {
 }
 
 void BSD::AcceptWork::Response(Kernel::HLERequestContext& ctx) {
-    ctx.WriteBuffer(write_buffer);
+    if (write_buffer.size() > 0) {
+        ctx.WriteBuffer(write_buffer);
+    }
 
     IPC::ResponseBuilder rb{ctx, 5};
     rb.Push(RESULT_SUCCESS);
@@ -255,6 +259,25 @@ void BSD::GetSockName(Kernel::HLERequestContext& ctx) {
     rb.Push<u32>(static_cast<u32>(write_buffer.size()));
 }
 
+void BSD::GetSockOpt(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const s32 fd = rp.Pop<s32>();
+    const u32 level = rp.Pop<u32>();
+    const auto optname = static_cast<OptName>(rp.Pop<u32>());
+
+    LOG_WARNING(Service, "(STUBBED) called. fd={} level={} optname=0x{:x}", fd, level, optname);
+
+    std::vector<u8> optval(ctx.GetWriteBufferSize());
+
+    ctx.WriteBuffer(optval);
+
+    IPC::ResponseBuilder rb{ctx, 5};
+    rb.Push(RESULT_SUCCESS);
+    rb.Push<s32>(-1);
+    rb.PushEnum(Errno::NOTCONN);
+    rb.Push<u32>(static_cast<u32>(optval.size()));
+}
+
 void BSD::Listen(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const s32 fd = rp.Pop<s32>();
@@ -401,6 +424,16 @@ void BSD::Close(Kernel::HLERequestContext& ctx) {
     BuildErrnoResponse(ctx, CloseImpl(fd));
 }
 
+void BSD::EventFd(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const u64 initval = rp.Pop<u64>();
+    const u32 flags = rp.Pop<u32>();
+
+    LOG_WARNING(Service, "(STUBBED) called. initval={}, flags={}", initval, flags);
+
+    BuildErrnoResponse(ctx, Errno::SUCCESS);
+}
+
 template <typename Work>
 void BSD::ExecuteWork(Kernel::HLERequestContext& ctx, Work work) {
     work.Execute(this);
@@ -424,7 +457,8 @@ std::pair<s32, Errno> BSD::SocketImpl(Domain domain, Type type, Protocol protoco
         return {-1, Errno::MFILE};
     }
 
-    FileDescriptor& descriptor = file_descriptors[fd].emplace();
+    file_descriptors[fd] = FileDescriptor{};
+    FileDescriptor& descriptor = *file_descriptors[fd];
     // ENONMEM might be thrown here
 
     LOG_INFO(Service, "New socket fd={}", fd);
@@ -519,7 +553,8 @@ std::pair<s32, Errno> BSD::AcceptImpl(s32 fd, std::vector<u8>& write_buffer) {
         return {-1, Translate(bsd_errno)};
     }
 
-    FileDescriptor& new_descriptor = file_descriptors[new_fd].emplace();
+    file_descriptors[new_fd] = FileDescriptor{};
+    FileDescriptor& new_descriptor = *file_descriptors[new_fd];
     new_descriptor.socket = std::move(result.socket);
     new_descriptor.is_connection_based = descriptor.is_connection_based;
 
@@ -812,7 +847,7 @@ BSD::BSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
         {14, &BSD::Connect, "Connect"},
         {15, &BSD::GetPeerName, "GetPeerName"},
         {16, &BSD::GetSockName, "GetSockName"},
-        {17, nullptr, "GetSockOpt"},
+        {17, &BSD::GetSockOpt, "GetSockOpt"},
         {18, &BSD::Listen, "Listen"},
         {19, nullptr, "Ioctl"},
         {20, &BSD::Fcntl, "Fcntl"},
@@ -826,7 +861,7 @@ BSD::BSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
         {28, nullptr, "GetResourceStatistics"},
         {29, nullptr, "RecvMMsg"},
         {30, nullptr, "SendMMsg"},
-        {31, nullptr, "EventFd"},
+        {31, &BSD::EventFd, "EventFd"},
         {32, nullptr, "RegisterResourceStatisticsName"},
         {33, nullptr, "Initialize2"},
     };

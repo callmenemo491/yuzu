@@ -6,8 +6,8 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/ipc_helpers.h"
+#include "core/hle/kernel/k_shared_memory.h"
 #include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/shared_memory.h"
 #include "core/hle/service/hid/irs.h"
 
 namespace Service::HID {
@@ -37,10 +37,6 @@ IRS::IRS(Core::System& system_) : ServiceFramework{system_, "irs"} {
     // clang-format on
 
     RegisterHandlers(functions);
-
-    auto& kernel = system.Kernel();
-
-    shared_mem = SharedFrom(&kernel.GetIrsSharedMem());
 }
 
 void IRS::ActivateIrsensor(Kernel::HLERequestContext& ctx) {
@@ -62,7 +58,7 @@ void IRS::GetIrsensorSharedMemoryHandle(Kernel::HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2, 1};
     rb.Push(RESULT_SUCCESS);
-    rb.PushCopyObjects(shared_mem);
+    rb.PushCopyObjects(&system.Kernel().GetIrsSharedMem());
 }
 
 void IRS::StopImageProcessor(Kernel::HLERequestContext& ctx) {

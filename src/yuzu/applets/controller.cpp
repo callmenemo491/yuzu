@@ -16,6 +16,7 @@
 #include "yuzu/applets/controller.h"
 #include "yuzu/configuration/configure_input.h"
 #include "yuzu/configuration/configure_input_profile_dialog.h"
+#include "yuzu/configuration/configure_motion_touch.h"
 #include "yuzu/configuration/configure_vibration.h"
 #include "yuzu/configuration/input_profiles.h"
 #include "yuzu/main.h"
@@ -67,6 +68,8 @@ bool IsControllerCompatible(Settings::ControllerType controller_type,
         return parameters.allow_right_joycon;
     case Settings::ControllerType::Handheld:
         return parameters.enable_single_mode && parameters.allow_handheld;
+    case Settings::ControllerType::GameCube:
+        return parameters.allow_gamecube_controller;
     default:
         return false;
     }
@@ -204,6 +207,9 @@ QtControllerSelectorDialog::QtControllerSelectorDialog(
     connect(ui->vibrationButton, &QPushButton::clicked, this,
             &QtControllerSelectorDialog::CallConfigureVibrationDialog);
 
+    connect(ui->motionButton, &QPushButton::clicked, this,
+            &QtControllerSelectorDialog::CallConfigureMotionTouchDialog);
+
     connect(ui->inputConfigButton, &QPushButton::clicked, this,
             &QtControllerSelectorDialog::CallConfigureInputProfileDialog);
 
@@ -264,6 +270,18 @@ void QtControllerSelectorDialog::LoadConfiguration() {
 
 void QtControllerSelectorDialog::CallConfigureVibrationDialog() {
     ConfigureVibration dialog(this);
+
+    dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
+                          Qt::WindowSystemMenuHint);
+    dialog.setWindowModality(Qt::WindowModal);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        dialog.ApplyConfiguration();
+    }
+}
+
+void QtControllerSelectorDialog::CallConfigureMotionTouchDialog() {
+    ConfigureMotionTouch dialog(this, input_subsystem);
 
     dialog.setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint |
                           Qt::WindowSystemMenuHint);
@@ -370,7 +388,7 @@ void QtControllerSelectorDialog::SetSupportedControllers() {
             QStringLiteral("image: url(:/controller/applet_joycon_right%0_disabled); ").arg(theme));
     }
 
-    if (parameters.allow_pro_controller) {
+    if (parameters.allow_pro_controller || parameters.allow_gamecube_controller) {
         ui->controllerSupported5->setStyleSheet(
             QStringLiteral("image: url(:/controller/applet_pro_controller%0); ").arg(theme));
     } else {
@@ -420,6 +438,10 @@ void QtControllerSelectorDialog::SetEmulatedControllers(std::size_t player_index
                            Settings::ControllerType::Handheld);
         emulated_controllers[player_index]->addItem(tr("Handheld"));
     }
+
+    pairs.emplace_back(emulated_controllers[player_index]->count(),
+                       Settings::ControllerType::GameCube);
+    emulated_controllers[player_index]->addItem(tr("GameCube Controller"));
 }
 
 Settings::ControllerType QtControllerSelectorDialog::GetControllerTypeFromIndex(
@@ -461,6 +483,7 @@ void QtControllerSelectorDialog::UpdateControllerIcon(std::size_t player_index) 
         switch (GetControllerTypeFromIndex(emulated_controllers[player_index]->currentIndex(),
                                            player_index)) {
         case Settings::ControllerType::ProController:
+        case Settings::ControllerType::GameCube:
             return QStringLiteral("image: url(:/controller/applet_pro_controller%0); ");
         case Settings::ControllerType::DualJoyconDetached:
             return QStringLiteral("image: url(:/controller/applet_dual_joycon%0); ");
@@ -535,7 +558,7 @@ void QtControllerSelectorDialog::UpdateControllerState(std::size_t player_index)
     // This emulates a delay between disconnecting and reconnecting controllers as some games
     // do not respond to a change in controller type if it was instantaneous.
     using namespace std::chrono_literals;
-    std::this_thread::sleep_for(20ms);
+    std::this_thread::sleep_for(60ms);
 
     UpdateController(controller_type, player_index, player_connected);
 }
